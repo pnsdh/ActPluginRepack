@@ -1,0 +1,12 @@
+# 빌드 산출물 (항상 input\ 에서 재생성 가능)
+/output/
+/data/
+
+# input\ 은 폴더 구조만 추적한다 — 실제 재료(플러그인 DLL / opcode / override / CSV)는
+# 직접 구해서 배치 (README.md 준비물 참고)
+/input/*/*
+!/input/*/.gitkeep
+
+# .NET 빌드
+tool/bin/
+tool/obj/
