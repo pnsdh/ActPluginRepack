@@ -74,7 +74,18 @@ internal static class OpcodeNames
 internal static class OpcodeSources
 {
     private const string YarukonRaw = "https://raw.githubusercontent.com/Yarukon/FFXIVNetworkOpcodes/master/output";
+    public const string KarashiiroRepo = "karashiiro/FFXIVOpcodes";
     private const string KarashiiroUrl = "https://raw.githubusercontent.com/karashiiro/FFXIVOpcodes/master/opcodes.min.json";
+
+    // opcodes.min.json 을 만드는 지역별 원본 파일 (갱신 시각 확인용)
+    public static string? KarashiiroFile(Region region) => region.Karashiiro switch
+    {
+        "Global" => "FFXIVOpcodes/Ipcs.cs",
+        "CN" => "FFXIVOpcodes/Ipcs_cn.cs",
+        "KR" => "FFXIVOpcodes/Ipcs_kr.cs",
+        "TW" => "FFXIVOpcodes/Ipcs_tw.cs",
+        _ => null,
+    };
 
     // 게임 버전 "2026.10.06.0000.0000" -> Yarukon 폴더 "CN_2026.10.06".
     public static string YarukonFolder(string gameVersion) => "CN_" + gameVersion[..Math.Min(10, gameVersion.Length)];

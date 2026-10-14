@@ -25,7 +25,7 @@ internal static class Jobs
         vm.MapProgress = stage => stage is "opcode" or "CSV" ? "data" : stage == "완료" ? null : "check";
 
         vm.Start("check");
-        var r = await Runner.Run(vm.Reporter, ct, () => { using var _ = ws.Lock(); return Prepare.Run(ws, new PrepareOptions()); });
+        var r = await Runner.Run(vm.Reporter, ct, () => { using var _ = ws.Lock(); return Prepare.Run(ws, new PrepareOptions { IdaFallback = false }); }); // IDA 는 고급 모드에서만
         vm.Finish("check");
         vm.Finish("data", r.Steps.Any(s => s.Status == StepStatus.Warning) ? StepState.Warning : StepState.Done);
 
@@ -149,6 +149,9 @@ internal static class Jobs
             if (r.Steps.Any(s => s.Status != StepStatus.Ok && !s.Name.StartsWith("game ", StringComparison.Ordinal)))
                 message += "\n\n일부 단계에 경고가 있습니다. [자세한 기록]에서 확인하세요.";
         }
+        if (r.PatchNeeded == true && r.UnconfirmedOpcodes.Count > 0)
+            message += "\n\n아직 공개된 자료가 없어 이 PC 에서 직접 구한 값으로 고쳤습니다. 큰 패치에서는 가끔 틀릴 수 있으니, " +
+                       "공개 자료가 나온 뒤(보통 몇 시간 안)에 [다시 확인하기]를 한 번 더 누르세요.";
         if (r.Outdated.Count > 0)
             message += $"\n\n참고: {string.Join(", ", r.Outdated.Select(c => c.Region.Label))} 클라이언트는 최신 버전이 아니라 이번 확인에서 제외했습니다. " +
                        "그 서버에서 플레이할 때는 런처로 업데이트한 뒤 다시 누르세요.";
@@ -226,7 +229,6 @@ internal static class Jobs
                 Csv = o.Csv,
                 ForceIda = o.ForceIda,
                 IdaTarget = o.IdaTarget,
-                ForceLocalDiff = o.ForceLocalDiff,
                 Overwrite = o.Overwrite,
                 Sources = o.SelectedSources,
             };

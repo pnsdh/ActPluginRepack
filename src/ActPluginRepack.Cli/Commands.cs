@@ -132,7 +132,7 @@ internal static class Commands
     public static int Prepare(string[] args)
     {
         var o = Options.Parse(args, ["--root", "--plugin", "--sources", "--ida-target"],
-            ["--no-plugin", "--no-csv", "--no-opcodes", "--no-snapshot", "--no-sigcheck", "--no-repair", "--ida", "--localdiff",
+            ["--no-plugin", "--no-csv", "--no-opcodes", "--no-snapshot", "--no-sigcheck", "--no-repair", "--ida",
              "--overwrite"]);
         var ws = o.Workspace();
         using var _ = ws.Lock();
@@ -147,7 +147,6 @@ internal static class Commands
             Csv = !o.Flag("--no-csv"),
             ForceIda = o.Flag("--ida"),
             IdaTarget = o.Get("--ida-target"),
-            ForceLocalDiff = o.Flag("--localdiff"),
             Overwrite = o.Flag("--overwrite"),
             Sources = o.GetList("--sources"),
         });
@@ -161,6 +160,9 @@ internal static class Commands
         }
         if (r.PatchNeeded == false) Log.Done($"[prepare] {r.Verdict}");
         else Log.Section($"[prepare] {r.Verdict}");
+        if (r.PatchNeeded == true && r.UnconfirmedOpcodes.Count > 0)
+            Log.Warn($"[prepare] {string.Join(", ", r.UnconfirmedOpcodes.Select(x => x.Name))} 의 opcode 는 공개 자료 없이 직접 구한 값입니다 - " +
+                     "큰 패치에서는 틀릴 수 있으니 공개되면(보통 몇 시간 안) prepare 를 다시 실행하세요.");
         if (!r.HooksOk) return 2;
         if (r.MissingOpcodes.Count > 0)
         {

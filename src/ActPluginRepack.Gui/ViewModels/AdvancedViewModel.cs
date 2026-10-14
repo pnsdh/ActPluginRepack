@@ -23,15 +23,15 @@ internal sealed partial class AdvancedViewModel : ObservableObject
         foreach (var (name, label, group, description) in new[]
                  {
                      ("yarukon", "Yarukon", "opcode",
-                      "Yarukon/FFXIVNetworkOpcodes 가 CN 클라이언트에서 추출해 공개한 opcode 입니다. 게임 버전 날짜로 정확히 맞춥니다(CN/글로벌/한국 공통). 1순위."),
+                      "Yarukon/FFXIVNetworkOpcodes 가 CN 클라이언트에서 IDA 로 추출해 공개한 opcode 입니다. 게임 버전 날짜로 맞춥니다(CN/글로벌/한국 공통). 1순위."),
                      ("karashiiro", "karashiiro", "opcode",
-                      "karashiiro/FFXIVOpcodes 의 지역별 opcode 입니다(대만판 포함). 패치 번호로 게임 버전과 맞음이 확인되면 2순위, 확인할 수 없으면(대만판 등) 다른 출처가 없을 때만 씁니다."),
-                     ("opcodediff", "opcodediff diff", "opcode",
-                      "xivdev/opcodediff 가 공개한 '직전 버전 → 이번 버전' opcode 대응표를 직전 목록에 적용합니다. 바이너리가 필요 없습니다. 3순위."),
+                      "karashiiro/FFXIVOpcodes 의 지역별 opcode 입니다(대만판 포함). 이번 버전용임이 확인되면(패치 번호, 또는 지역 파일이 이번 출시 뒤에 갱신됨) 2순위, 확인할 수 없으면(대만판 등) 다른 출처가 없을 때만 씁니다."),
                      ("localdiff", "로컬 opcodediff", "opcode",
-                      "opcodediff 를 이 PC 에서 직접 실행합니다(클라이언트당 약 5초). 스크립트·radare2·Python 패키지는 자동으로 받고, Python 3.12 이상이 없으면 휴대용 Python(약 14MB)도 받아 씁니다. 공개본이 없을 때 씁니다."),
+                      "지금 게임 exe 와 직전 출시 exe(공식 패치 서버에서 받음)를 opcodediff 로 맞대 공식 플러그인 값을 바꿉니다(클라이언트당 약 5초). 패치 번호가 필요 없어 공개 자료가 나오기 전(출시 직후)에도 됩니다. 항상 돌려 공개본과 대조하고, 다르면 공개본을 씁니다(큰 패치에서 가끔 틀림). 스크립트·radare2·Python 패키지는 자동으로 받고, Python 3.12 이상이 없으면 휴대용 Python(약 14MB)도 받아 씁니다."),
+                     ("opcodediff", "opcodediff diff", "opcode",
+                      "xivdev/opcodediff 가 공개한 '직전 버전 → 이번 버전' opcode 대응표를 직전 목록에 적용합니다. 로컬 opcodediff 와 같은 스크립트의 결과라, 로컬 opcodediff 를 못 돌렸을 때 씁니다."),
                      ("ida", "IDA", "opcode",
-                      "IDA 로 exe 를 분석해 직접 추출합니다(약 5분, 기본은 같은 버전 중국판 exe 한 번). IDA 9 이상이 필요하며, 앞의 출처가 모두 없을 때 씁니다."),
+                      "IDA 로 exe 를 분석해 직접 추출합니다(약 5분, 기본은 같은 버전 중국판 exe 한 번). IDA 9 이상이 필요하며, 앞의 출처가 모두 없을 때 씁니다(간편 모드에서는 쓰지 않음)."),
                      ("oxidizer", "xiv-data-oxidizer", "CSV",
                       "설치된 클라이언트에서 직접 추출합니다(git + Rust 필요, 설정에서 켜야 함). 결과는 SharpVision 과 같습니다."),
                      ("sharpvision", "SharpVision", "CSV",
@@ -58,7 +58,6 @@ internal sealed partial class AdvancedViewModel : ObservableObject
         if (!ShowHotfix) DoHotfix = false; // 설정에서 배포 기능을 껐으면 보이지 않는 선택이 남지 않게
         // 쓸 수 없게 된 도구(설정에서 끔, 경로를 지움)의 "우선" 선택은 꺼진 칸에 체크된 채 남지 않게 끈다
         if (!HasIda) ForceIda = false;
-        if (!HasLocalDiff) ForceLocalDiff = false;
         // IDA 분석 대상을 직접 바꾸지 않았으면(옛 기본값 그대로) 설정의 새 기본값을 따른다
         if (IdaTarget == oldIdaDefault) IdaTarget = _idaTargetDefault;
         RefreshStatus();
@@ -108,7 +107,6 @@ internal sealed partial class AdvancedViewModel : ObservableObject
             .OrderBy(r => r.Name == AppConfig.DefaultIdaTarget ? 0 : 1)
             .Select(r => new KeyValuePair<string, string>(r.Name, $"{r.Label} exe{(r.Name == AppConfig.DefaultIdaTarget ? " (기본)" : "")}"))
             .ToList();
-    [ObservableProperty] private bool _forceLocalDiff;
     [ObservableProperty] private bool _overwrite;
     [ObservableProperty] private bool _hasIda;
     [ObservableProperty] private bool _hasLocalDiff;
@@ -129,7 +127,7 @@ internal sealed partial class AdvancedViewModel : ObservableObject
     private void ResetDefaults()
     {
         UpdatePlugin = Sigcheck = Repair = Opcodes = Csv = DoBuild = BuildCsv = InstallOverlay = true;
-        DoRsv = DoInstall = InstallOfficial = DoHotfix = ForceIda = ForceLocalDiff = Overwrite = false;
+        DoRsv = DoInstall = InstallOfficial = DoHotfix = ForceIda = Overwrite = false;
         IdaTarget = _idaTargetDefault;
         foreach (var s in Sources) s.IsChecked = true;
     }

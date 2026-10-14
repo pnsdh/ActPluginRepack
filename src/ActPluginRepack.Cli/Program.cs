@@ -91,7 +91,8 @@ internal static class Program
               prepare  입력 데이터 준비: 최신 공식 플러그인 -> 스냅샷 -> 시그니처 점검·자동 복구 -> opcode -> CSV
                          끝에 패치가 필요한지 판단한다 (공식 플러그인이 이미 맞으면 불필요)
                          --plugin <dll> --no-plugin --no-snapshot --no-sigcheck --no-repair --no-opcodes --no-csv
-                         --ida / --localdiff (공개본이 있어도 직접 추출해 대조)  --overwrite (추출 캐시 무시)
+                         --ida (IDA 로 직접 추출해 그 결과를 우선)  --overwrite (추출 캐시 무시)
+                         opcode: Yarukon > karashiiro(버전 확인 시) > 로컬 opcodediff(지금 exe vs 직전 출시 exe, 항상 대조) > ...
                          --ida-target <지역> (IDA 로 분석할 exe: simplified-chinese(기본, 없으면 받음) / global / korean)
                          설치된 게임이 최신 버전이 아니면 그 클라이언트는 빼고 진행 (모두 오래됐으면 멈춤)
                          --sources a,b (출처 제한: oxidizer, sharpvision, datamining, xivdata,

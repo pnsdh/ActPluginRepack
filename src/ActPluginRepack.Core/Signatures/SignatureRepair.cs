@@ -143,8 +143,8 @@ internal static class SignatureRepair
         return null;
     }
 
-    // 원래 패턴이 맞는 옛 exe: snapshots\<지역>\ 의 이전 버전(최신부터), 없으면 대응표의 직전 버전을 받아서
-    // walkBack: 대응표의 직전 버전에서 안 맞으면 공식 패치 목록을 더 거슬러 올라간다 (패킷 후크만 — 경고 항목까지
+    // 원래 패턴이 맞는 옛 exe: snapshots\<지역>\ 의 이전 버전(최신부터), 없으면 직전 출시(공식 패치 목록)를 받아서
+    // walkBack: 직전 출시에서 안 맞으면 공식 패치 목록을 더 거슬러 올라간다 (패킷 후크만 — 경고 항목까지
     // 하면 원래부터 깨진 시그니처 때문에 exe 를 여러 번 받는다)
     private static string? OldExe(Workspace ws, GameClient client, SigPattern pattern, bool walkBack, List<Exception> failures)
     {
@@ -161,22 +161,21 @@ internal static class SignatureRepair
         foreach (string p in paths)
             if (pattern.Scan(Target(p)).Count > 0) return p;
 
-        // 받아 볼 버전: 대응표의 직전 출시 버전, 그다음 공식 패치 목록에서 앞선 패치들 (대응표에 없는 지역 전용
-        // 중간 패치 등). 원래 패턴이 맞는 exe 를 찾으면 멈춘다 — 미리 배포된 패치는 이미 새 exe 라 걸러진다.
+        // 받아 볼 버전: 직전 출시, 그다음(walkBack) 공식 패치 목록에서 앞선 패치들. 원래 패턴이 맞는 exe 를 찾으면 멈춘다.
         if (!Thaliak.Supports(client.Region)) return null;
         var tried = paths.Select(p => Path.GetFileName(Path.GetDirectoryName(p))!).ToHashSet();
         var candidates = new List<string>();
-        string? previous = GameVersions.Previous(client.Version)?.Version;
-        if (previous != null) candidates.Add(previous);
-        else if (GameVersions.LastFailure is { } tableFailure && !failures.Contains(tableFailure)) failures.Add(tableFailure);
-        if (walkBack || previous == null)
+        string? previous = null;
+        try
         {
-            try { candidates.AddRange(Thaliak.EarlierVersions(client.Region, client.Version).Take(walkBack ? 4 : 1)); }
-            catch (Exception ex) when (Errors.Recoverable(ex))
-            {
-                Log.Warn($"[repair] 공식 패치 목록을 받지 못함: {Errors.Describe(ex)}");
-                failures.Add(ex);
-            }
+            previous = Thaliak.PreviousRelease(client.Region, client.Version);
+            if (previous != null) candidates.Add(previous);
+            if (walkBack) candidates.AddRange(Thaliak.EarlierVersions(client.Region, client.Version).Take(4));
+        }
+        catch (Exception ex) when (Errors.Recoverable(ex))
+        {
+            Log.Warn($"[repair] 공식 패치 목록을 받지 못함: {Errors.Describe(ex)}");
+            failures.Add(ex);
         }
         foreach (string version in candidates.Distinct().Where(v => !tried.Contains(v)))
         {

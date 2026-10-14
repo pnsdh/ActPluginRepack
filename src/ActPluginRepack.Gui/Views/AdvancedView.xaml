@@ -63,7 +63,7 @@
                         <CheckBox Content="깨진 시그니처 자동 복구" IsChecked="{Binding Repair}" Margin="22,1,0,1" IsEnabled="{Binding Sigcheck}"
                                   ToolTip="깨진 시그니처를 upstream deucalion → SigRegen(옛 exe 와 비교해 재생성) 순서로 고쳐 input\signatures 에 기록하고 다시 점검합니다. 후보는 설정된 모든 클라이언트에서 검증을 통과해야 채택합니다. 어느 쪽을 쓸지는 아래 데이터 소스의 '시그니처'에서 고릅니다." />
                         <CheckBox Content="opcode 수집 (+ extras)" IsChecked="{Binding Opcodes}"
-                                  ToolTip="Yarukon 공개본 → karashiiro(버전 확인 시) → opcodediff 공개 diff → 로컬 opcodediff → IDA 순서로 지역별 opcode 를 구해 input\opcodes 와 extras\(Lemegeton, OverlayPlugin)에 기록합니다. 출처끼리 대조해 값이 다르면 경고합니다." />
+                                  ToolTip="Yarukon 공개본 → karashiiro(버전 확인 시) → 로컬 opcodediff(지금 exe 와 직전 출시 exe 비교) → opcodediff 공개 diff → IDA 순서로 지역별 opcode 를 구해 input\opcodes 와 extras\(Lemegeton, OverlayPlugin)에 기록합니다. 출처끼리 대조해 값이 다르면 경고합니다." />
                         <CheckBox Content="IDA 결과 우선 (공개본이 있어도 실행)" IsChecked="{Binding ForceIda}" Margin="22,1,0,1" IsEnabled="{Binding HasIda}"
                                   ToolTip="공개본이 있어도 IDA 로 exe 를 분석해 직접 추출하고 그 결과를 우선합니다(약 5분). IDA 9 이상이 필요합니다. 설치 폴더는 Program Files 에서 자동으로 찾으며, 다른 곳이면 설정에서 지정합니다." />
                         <StackPanel Orientation="Horizontal" Margin="44,2,0,4" IsEnabled="{Binding HasIda}"
@@ -73,8 +73,6 @@
                                       SelectedValue="{Binding IdaTarget}" MinWidth="180" Padding="8,4"
                                       AutomationProperties.Name="IDA 분석 대상" />
                         </StackPanel>
-                        <CheckBox Content="로컬 opcodediff 결과 우선 (공개본이 있어도 실행)" IsChecked="{Binding ForceLocalDiff}" Margin="22,1,0,1" IsEnabled="{Binding HasLocalDiff}"
-                                  ToolTip="공개본이 있어도 opcodediff 를 이 PC 에서 실행하고 그 결과를 우선합니다(클라이언트당 약 5초). 스크립트·radare2·Python 패키지는 자동으로 받으며, Python 3.12 이상이 없으면 휴대용 Python(약 14MB)도 받아 씁니다." />
                         <Grid Margin="22,2,0,4" Visibility="{Binding DirectExtractHint, Converter={StaticResource Visible}}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -172,7 +170,8 @@
             <Border Grid.Row="1" CornerRadius="8" Padding="14,10"
                     Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
                     BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                <!-- WPF-UI 의 스크롤바는 내용 위에 겹쳐 그려진다 — 막대가 놓일 자리만큼 보이는 영역을 줄여 글자와 겹치지 않게 -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="0,0,18,18">
                     <TextBlock Text="{Binding StatusText}" Style="{StaticResource Mono}" TextWrapping="NoWrap"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                 </ScrollViewer>

@@ -1,14 +1,18 @@
 // prepare 의 opcode 단계: 지역마다 출처를 골라 대조하고, Machina/Lemegeton/OverlayPlugin 형식으로 쓴다.
 //
 // 출처 우선순위 (지역마다):
-//   1) Yarukon 공개본 — 게임 버전 날짜로 정확히 맞춘다 (CN/Global/KR 공통)
-//   2) karashiiro — 패치 번호를 GameVersions 로 게임 버전과 맞춘다. 맞음이 확인될 때만 여기 (전체 목록이라
-//      diff 에서 유도한 값보다 앞). 확인할 수 없으면(TC, 대응표 미갱신) 맨 뒤.
-//   3) opcodediff 공개 diff — 직전 버전 opcode 에 적용 (바이너리 불필요, CN/Global/KR 공통)
-//   4) 로컬 opcodediff — 1~3 이 없을 때 (Python 이 없으면 휴대용을 받음; "localDiff": false 로 끔; --localdiff 면 항상, 가장 우선)
-//   5) IDA 직접 추출 — 1~4 가 없고 IDA 가 있을 때 (설정 또는 자동 탐색; --ida 면 항상, 가장 우선)
+//   1) Yarukon 공개본 — 게임 버전 날짜로 맞춘다 (CN/Global/KR 공통). IDA 로 항목마다 찾은 결과라 diff 보다 믿을 만하다.
+//   2) karashiiro — 이번 버전용임이 확인될 때만 여기 (패치 번호를 GameVersions 로, 표에 없으면 지역 파일 갱신 시각을 출시
+//      시각과 비교). 확인할 수 없으면(TC 등) 맨 뒤.
+//   3) 로컬 opcodediff — 지금 exe 와 직전 출시 exe(Thaliak)를 맞대 만든 대응표로 베이스 플러그인 값을 바꾼다 (LocalOpcodediff).
+//      패치 번호·대응표가 필요 없어 공개본이 나오기 전(출시 직후)에도 된다. 클라이언트가 있는 통합 지역(CN/Global/KR)에서 항상
+//      돌려 공개본과 대조한다 (Python 이 없으면 휴대용을 받음; "localDiff": false 로 끔). 클라이언트가 없는 통합 지역은 같은
+//      버전의 이 결과를 쓴다. vtable diff 는 큰 패치에서 가끔 틀리므로 1~2 와 다르면 1~2 를 쓴다.
+//   4) opcodediff 공개 diff — 직전 버전 opcode 에 적용 (3 과 같은 스크립트라 독립된 확인은 아님)
+//   5) IDA 직접 추출 — 1~4 가 없고 IDA 가 있을 때 (간편 모드에서는 쓰지 않음; --ida 면 항상, 가장 우선)
 //   6) 확인되지 않은 karashiiro
-// 고른 출처에 없는 이름은 다른 출처에서 보충하고, 출처끼리 값이 다르면 경고한다.
+// 고른 출처에 없는 이름은 다른 출처에서 보충하고, 출처끼리 값이 다르면 경고한다. 공개 자료(1·2·4) 없이 직접 구한 값만으로
+// 정한 지역은 Unconfirmed 에 남긴다 (공개되면 다시 확인하도록 안내).
 //
 // 대상 지역: 모든 지역(Region.All).
 //   - 이번에 쓰는 클라이언트(설정에 있고 최신 버전)의 지역은 Collect 로 — 위 출처 전부, 직접 추출 포함.
@@ -16,7 +20,8 @@
 //     Finish 로 — 직접 추출은 하지 않고 공개 출처나 같은 버전의 다른 클라이언트 추출 결과로만, Machina 26개가 다 채워질
 //     때만 input\opcodes 에 쓴다 (일부만 바뀐 opcode 는 옛 값이 새 패킷과 겹칠 수 있어서). 못 구하면 예전 prepare 가 남긴
 //     파일을 지워 베이스 플러그인 값을 쓰게 한다.
-internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig config, bool forceIda, bool forceLocalDiff,
+// idaFallback: 다른 출처가 모두 없을 때 IDA 를 돌릴지 (간편 모드는 false — IDA 는 고급 모드·명령줄에서만)
+internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig config, bool forceIda, bool idaFallback,
                                        bool overwrite,
                                        IReadOnlySet<string> sources) : IDisposable
 {
@@ -29,6 +34,10 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     private readonly Dictionary<string, Dictionary<int, int>?> _opcodediff = new(StringComparer.Ordinal); // 패치 -> diff
     private readonly List<(string Version, OpcodeSet Set)> _derivedSets = []; // 직접 추출(localdiff/IDA) 결과와 그 게임 버전
     private readonly List<ResolvedOpcodes> _resolved = [];
+    private readonly HashSet<Region> _unconfirmed = [];
+
+    // 공개 자료 없이 직접 구한 값(로컬 opcodediff / IDA)으로만 정한 지역 — 큰 패치에서는 틀릴 수 있어 공개되면 다시 확인할 것
+    public IReadOnlyCollection<Region> Unconfirmed => _unconfirmed;
     private Mono.Cecil.ModuleDefinition? _plugin;
 
     // 베이스 플러그인을 읽은 Cecil 모듈은 파일을 연 채로 둔다 — 취소·실패해도 닫히게 (Prepare 가 using)
@@ -146,34 +155,35 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         OpcodeSet? karashiiroLast = k is { Verified: false } && client != null ? karashiiro : null;
         bool published = yarukon != null || opcodediff != null || karashiiroFirst != null;
 
-        // 직접 추출: 로컬 opcodediff (빠름, ~5초) -> IDA (~5분). 공개본이 없을 때, 또는 --localdiff / --ida.
+        // 로컬 opcodediff (~5초, 결과는 버전마다 캐시): 클라이언트가 있는 통합 지역이면 항상
         OpcodeSet? localdiff = null;
-        if (client != null && region.CnOpcodes && config.LocalDiff && Use("localdiff") && (forceLocalDiff || !published))
+        if (client != null && region.CnOpcodes && config.LocalDiff && Use("localdiff"))
         {
             if (!LocalDiff.HasPython(config.Python))
-                Log.Note($"[opcode] 공개본 없음 - 로컬 opcodediff 는 설정한 Python 경로({config.Python})가 없어 건너뜀");
+                Log.Warn($"[opcode] 로컬 opcodediff 는 설정한 Python 경로({config.Python})가 없어 건너뜀");
             else
             {
-                if (!published) Log.Note("[opcode] 공개본 없음 - opcodediff 를 로컬에서 실행");
                 localdiff = Try("로컬 opcodediff", () => LocalOpcodediff(client));
                 if (localdiff != null) _derivedSets.Add((version!, localdiff));
             }
         }
+        // IDA (~5분): --ida 면 항상, 아니면 다른 출처가 모두 없을 때만 (간편 모드는 그때도 쓰지 않음)
         OpcodeSet? ida = null;
-        if (client != null && config.Ida != null && Use("ida") && (forceIda || (!published && localdiff == null)))
+        if (client != null && config.Ida != null && Use("ida") && (forceIda || (idaFallback && !published && localdiff == null)))
         {
-            if (!published) Log.Note("[opcode] 공개본/로컬 diff 없음 - IDA 로 직접 추출");
+            if (!forceIda) Log.Note("[opcode] 로컬 opcodediff·공개본 없음 - IDA 로 직접 추출");
             ida = Try("IDA", () => RunIda(client));
             if (ida != null) _derivedSets.Add((version!, ida));
         }
         // 설정에 없는 지역: 같은 opcode 를 쓰는 다른 클라이언트의 같은 게임 버전 직접 추출 결과
-        OpcodeSet? derived = client == null && region.CnOpcodes && !published
+        OpcodeSet? derived = client == null && region.CnOpcodes
             ? _derivedSets.FirstOrDefault(d => d.Version == version).Set : null;
 
         OpcodeSet? primary =
-            forceIda ? ida ?? yarukon ?? karashiiroFirst ?? opcodediff ?? localdiff ?? derived ?? karashiiroLast
-            : forceLocalDiff ? localdiff ?? yarukon ?? karashiiroFirst ?? opcodediff ?? ida ?? derived ?? karashiiroLast
-            : yarukon ?? karashiiroFirst ?? opcodediff ?? localdiff ?? ida ?? derived ?? karashiiroLast;
+            forceIda ? ida ?? yarukon ?? karashiiroFirst ?? localdiff ?? derived ?? opcodediff ?? karashiiroLast
+            : yarukon ?? karashiiroFirst ?? localdiff ?? derived ?? opcodediff ?? ida ?? karashiiroLast;
+        if (primary != null && !published && (primary == localdiff || primary == derived || primary == ida))
+            _unconfirmed.Add(region);
         if (primary == null)
         {
             if (client == null)
@@ -182,8 +192,8 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
                 Log.Warn($"[opcode] {region.Opcodes}: 이번 버전 것으로 확인된 출처 없음 - 베이스 플러그인 값을 씀 (클라이언트가 없는 지역은 직접 추출하지 않음)");
                 return null;
             }
-            string hint = config.Ida == null && localdiff == null
-                ? ", IDA 가 있으면 직접 추출" : "";
+            string hint = config.Ida != null && !idaFallback
+                ? ", 고급 모드에서 IDA 로 직접 추출할 수 있음" : "";
             Log.Warn($@"[opcode] {region.Opcodes}: 쓸 수 있는 출처 없음 - input\opcodes\{region.Opcodes}.txt 는 그대로" +
                     $" (나중에 다시 실행{hint})");
             return null;
@@ -264,21 +274,88 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         return map == null ? null : ApplyDiff(region, map, retail, prev, $"opcodediff {retail}");
     }
 
-    // opcodediff 로컬 실행 (config.json "localDiff" — 기본 켜짐, false 면 끔)
+    // opcodediff 로컬 실행 (config.json "localDiff" — 기본 켜짐, false 면 끔): 지금 exe 와 직전 출시 exe(Thaliak 출시 목록)를
+    // 맞대 "옛 값 -> 새 값" 대응표를 만들고, 베이스 플러그인 값을 거기 비춰 본다 (JudgeLocalDiff). 패치 번호는 쓰지 않는다
+    // (스크립트는 exe 파일 이름을 읽지 않음). 공식 플러그인은 항상 최신 출시용이거나 그 직전 출시용이라 직전 출시 하나면 되지만,
+    // 안전장치로 맞지 않으면 한 출시 더 앞의 exe 와도 맞대 본다 (거기서는 "베이스가 그 옛 출시용"일 때만 받아들인다).
+    private const int LocalDiffReleases = 2;
+
     private OpcodeSet? LocalOpcodediff(GameClient client)
     {
+        var region = client.Region!;
         string version = client.Version!;
-        string? retail = GameVersions.RetailOf(version);
-        var prev = GameVersions.Previous(version);
-        if (retail == null || prev == null)
+        var olds = Thaliak.EarlierReleases(region, version).Take(LocalDiffReleases).ToList();
+        if (olds.Count == 0)
         {
-            Log.Warn($"[opcode] localdiff: {version} 의 패치 번호/직전 버전을 몰라 생략 ({(GameVersions.LastFailure != null ? "대응표를 받지 못함" : "대응표 미갱신")})");
-            NoteVersionTableFailure();
+            Log.Warn($"[opcode] localdiff: 공식 패치 목록에 {version} 앞의 출시가 없어 생략");
             return null;
         }
-        var map = LocalDiff.Run(ws, client, retail, prev, config.Python, overwrite);
-        return ApplyDiff(client.Region!, map, retail, prev, $"localdiff {client.Region!.Name} {retail}");
+        var baseValues = BaseMachina(region);
+        for (int i = 0; i < olds.Count; i++)
+        {
+            string prev = olds[i];
+            var map = LocalDiff.Run(ws, client, prev, config.Python, overwrite);
+            string source = $"localdiff {region.Name} {prev} -> {version}";
+            var judged = JudgeLocalDiff(baseValues, map);
+            if (judged.Verdict == LocalDiffVerdict.BaseIsPrevious)
+                Log.Note($"[opcode] {source}: 베이스 플러그인은 {(i == 0 ? "직전 출시용" : "이 옛 출시용")} - 대응표로 바꿈");
+            else if (judged.Verdict == LocalDiffVerdict.BaseIsCurrent && i == 0)
+                Log.Note($"[opcode] {source}: 베이스 플러그인은 이미 지금 버전용");
+            else
+            {
+                Log.Warn($"[opcode] {source}: 베이스 플러그인 값이 대응표와 맞지 않음 (옛 값 {judged.OldHits}/{judged.Total}, " +
+                         $"새 값 {judged.NewHits}/{judged.Total})" + (i + 1 < olds.Count ? " - 한 출시 더 앞과 맞대 봄" : " - 이 결과는 쓰지 않음"));
+                continue;
+            }
+            return WithYarukonExtras(judged.Server!, map, prev, source, version);
+        }
+        return null;
     }
+
+    private OpcodeSet WithYarukonExtras(Dictionary<string, int> server, Dictionary<int, int> map, string prev, string source, string version)
+    {
+        // 베이스 플러그인에 없는 이름(부가 출력용)은 맞댄 옛 출시의 Yarukon 목록이 대응표의 옛 값과 맞을 때 거기서 바꿔 채운다
+        if (Use("yarukon") && Try($"Yarukon {prev}", () => Yarukon(prev)) is { } prevList)
+        {
+            var used = prevList.Server.Where(kv => OpcodeNames.Used.Contains(kv.Key)).ToList();
+            if (used.Count > 0 && used.Count(kv => map.ContainsKey(kv.Value)) >= used.Count * 0.9)
+                foreach (var (name, old) in used)
+                    if (!server.ContainsKey(name) && map.TryGetValue(old, out int now)) server[name] = now;
+        }
+        return new OpcodeSet(source, server, GameVersions.RetailOf(version));
+    }
+
+    internal enum LocalDiffVerdict { BaseIsPrevious, BaseIsCurrent, Unknown }
+
+    internal sealed record LocalDiffJudgement(LocalDiffVerdict Verdict, Dictionary<string, int>? Server, int OldHits, int NewHits, int Total);
+
+    // 직전 출시 -> 지금 대응표(map)에 베이스 플러그인 값(이름 -> 값)을 비춰 본다. opcode 공간이 촘촘해서(~1024 중 ~775 사용) 값
+    // 하나는 우연히도 어느 쪽에든 있으므로 전부 맞아야 인정한다 (우연히 26개가 다 맞을 확률은 0.1% 미만).
+    //   전부 옛 값 쪽에 있음 -> 베이스는 직전 출시용: 대응표로 바꾼 값 (바꿔도 같으면 opcode 가 안 바뀐 출시)
+    //   전부 새 값 쪽에만 있음 -> 베이스는 이미 지금 버전용: 베이스 값 그대로
+    //   어느 쪽도 아님, 또는 양쪽 다 맞는데 바꾼 값이 베이스와 다름(판단 불가) -> Unknown
+    // 대응표 오류를 "이미 지금 버전용"으로 넘겨짚지 않는다 — 패치가 필요한데 아무것도 하지 않게 되므로.
+    internal static LocalDiffJudgement JudgeLocalDiff(IReadOnlyDictionary<string, int> baseValues, IReadOnlyDictionary<int, int> map)
+    {
+        var used = baseValues.Where(kv => OpcodeNames.Used.Contains(kv.Key)).ToList();
+        var newSide = map.Values.ToHashSet();
+        int oldHits = used.Count(kv => map.ContainsKey(kv.Value));
+        int newHits = used.Count(kv => newSide.Contains(kv.Value));
+        bool onOld = used.Count > 0 && oldHits == used.Count, onNew = used.Count > 0 && newHits == used.Count;
+        var mapped = onOld
+            ? baseValues.Where(kv => map.ContainsKey(kv.Value)).ToDictionary(kv => kv.Key, kv => map[kv.Value], StringComparer.Ordinal)
+            : null;
+        bool unchanged = mapped != null && used.All(kv => mapped[kv.Key] == kv.Value);
+        if (onOld && (!onNew || unchanged)) return new(LocalDiffVerdict.BaseIsPrevious, mapped, oldHits, newHits, used.Count);
+        if (onNew && !onOld) return new(LocalDiffVerdict.BaseIsCurrent, new(baseValues, StringComparer.Ordinal), oldHits, newHits, used.Count);
+        return new(LocalDiffVerdict.Unknown, null, oldHits, newHits, used.Count);
+    }
+
+    // 베이스 플러그인의 Machina opcode (이름 -> 값)
+    private Dictionary<string, int> BaseMachina(Region region) =>
+        OpcodeNames.Machina
+            .Join(MachinaOpcodes.Parse(BaseText(region), "base"), m => m.Out, kv => kv.Key, (m, kv) => (m.Name, kv.Value))
+            .ToDictionary(x => x.Name, x => x.Value, StringComparer.Ordinal);
 
     // diff(직전 버전 opcode -> 이번 버전 opcode)를 직전 버전 opcode 목록에 적용한다.
     // 직전 버전 목록: Yarukon 의 직전 버전 전체 목록, 없으면 베이스 플러그인(직전 버전용이라고 보고).
@@ -291,9 +368,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         // 직전 버전 Yarukon 을 받지 못해도 베이스 플러그인 후보로는 해 본다 (diff 결과를 통째로 버리지 않게)
         if (Use("yarukon") && Try($"Yarukon {prev.Retail}", () => Yarukon(prev.Version)) is { } prevSet)
             candidates.Add(($"Yarukon {prev.Retail}", prevSet.Server, 0.9));
-        candidates.Add(("베이스 플러그인", OpcodeNames.Machina
-            .Join(MachinaOpcodes.Parse(BaseText(region), "base"), m => m.Out, kv => kv.Key, (m, kv) => (m.Name, kv.Value))
-            .ToDictionary(x => x.Name, x => x.Value, StringComparer.Ordinal), 1.0));
+        candidates.Add(("베이스 플러그인", BaseMachina(region), 1.0));
 
         foreach (var (what, old, need) in candidates)
         {
@@ -354,7 +429,20 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             return null;
         }
 
-        // 버전을 확인할 수 없으면(TC, 대응표 미갱신): 베이스 플러그인 값과 대부분 같으면 아직 이번 패치로 갱신되지
+        // 패치 번호가 대응표에 아직 없으면: 이 지역 데이터 파일이 이번 출시를 내려준 뒤에 갱신됐는지로 (한 파일에 모든 지역이
+        // 모이므로 지역별 원본 파일의 커밋 시각 — 대만판만 갱신한 커밋을 이 지역 갱신으로 보지 않게)
+        if (version != null && UpdatedSinceRelease(region, version) is { } updated)
+        {
+            if (updated)
+            {
+                Log.Note($"[opcode] {set.Source}: 이번 출시 뒤에 갱신됨 - 이번 버전 것으로 봄");
+                return new(set, true);
+            }
+            Log.Note($"[opcode] {set.Source}: 이번 출시 전에 갱신된 것 - 제외");
+            return null;
+        }
+
+        // 그것도 알 수 없으면(TC 등): 베이스 플러그인 값과 대부분 같으면 아직 이번 패치로 갱신되지
         // 않은 것. 달라도 직전 패치 데이터일 수 있으므로 확인되지 않았다고 알린다.
         var baseValues = MachinaOpcodes.Parse(BaseText(region), "base");
         var mine = MachinaOpcodes.FromSet(set);
@@ -367,6 +455,26 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         }
         Log.Warn($"[opcode] {set.Source}: 이번 게임 버전 것인지 확인할 수 없음 (패치 번호 대응표에 없음) - 다른 출처가 없을 때만 쓰임");
         return new(set, false);
+    }
+
+    // karashiiro 의 이 지역 원본 파일이 이번 버전이 나온 뒤(Thaliak 이 처음 내려준 시각)에 커밋됐는지. 알 수 없으면 null.
+    // 통합 클라이언트(CN/Global/KR)는 같은 버전을 쓰므로 어느 지역에서든 처음 나온 시각 — 한국 서버가 몇 시간 늦게 패치돼도
+    // 그 전에 올라온 이번 버전 데이터를 옛 것으로 보지 않게 (7.57: 글로벌 05:51, karashiiro 06:25, 한국 08:15).
+    private static bool? UpdatedSinceRelease(Region region, string version)
+    {
+        if (OpcodeSources.KarashiiroFile(region) is not { } file) return null;
+        try
+        {
+            var regions = region.CnOpcodes ? Region.All.Where(r => r.CnOpcodes) : [region];
+            if (regions.Select(r => Thaliak.ReleasedAt(r, version)).Where(t => t != null).Min() is not { } released) return null;
+            var commit = GitHub.RecentCommits(OpcodeSources.KarashiiroRepo, "master", file, 1).FirstOrDefault();
+            return commit == null ? null : commit.Date >= released;
+        }
+        catch (Exception ex) when (Errors.Recoverable(ex))
+        {
+            Log.Note($"[opcode] karashiiro 갱신 시각을 확인하지 못함 - {Errors.Describe(ex)}");
+            return null;
+        }
     }
 
     private string BaseText(Region region)

@@ -21,8 +21,8 @@ internal sealed record PrepareOptions
     public bool Opcodes { get; init; } = true;
     public bool Csv { get; init; } = true;
     public bool ForceIda { get; init; }
+    public bool IdaFallback { get; init; } = true; // 다른 opcode 출처가 모두 없을 때 IDA 로 (간편 모드는 false)
     public string? IdaTarget { get; init; }        // IDA 로 분석할 exe 의 지역 (null: config.json, 기본 중국판)
-    public bool ForceLocalDiff { get; init; }
     public bool Overwrite { get; init; }           // 추출 캐시 무시
     public IReadOnlyCollection<string> Sources { get; init; } = []; // 출처 제한 (비면 전부)
 }
@@ -48,6 +48,8 @@ internal sealed record PrepareResult(
     public Exception? OpcodeDownloadFailure { get; init; }
     // 깨진 시그니처를 고치려고 후보·옛 exe 를 받다 실패한 까닭 (없으면 null — 받았는데도 고치지 못함)
     public Exception? SignatureDownloadFailure { get; init; }
+    // 공개 자료 없이 직접 구한 opcode(로컬 opcodediff / IDA)로만 정한 지역 — 공개되면 다시 확인하도록 안내
+    public IReadOnlyList<Region> UnconfirmedOpcodes { get; init; } = [];
 }
 
 internal sealed record OutdatedClient(string Name, Region Region, string Version, string Latest);
@@ -74,10 +76,6 @@ internal static class Prepare
         if (o.IdaTarget != null) config = config with { IdaTarget = Config.ParseIdaTarget(o.IdaTarget) };
         if (o.ForceIda && config.Ida == null)
             throw new ToolException($"IDA 설치 폴더를 찾지 못했습니다. {Config.FileName} 의 \"ida\" 에 설치 폴더를 지정하세요.");
-        if (o.ForceLocalDiff && !config.LocalDiff)
-            throw new ToolException($"로컬 opcodediff 가 {Config.FileName} 에서 꺼져 있습니다 (\"localDiff\": false).");
-        if (o.ForceLocalDiff && !LocalDiff.HasPython(config.Python))
-            throw new ToolException($"{Config.FileName} 의 \"python\" 에 적은 Python 이 없습니다: {config.Python}. 고치거나 지우세요 (지우면 설치된 Python 을 찾고, 없으면 휴대용 Python 을 받아 씁니다).");
         if (o.Sources.FirstOrDefault(s => !AllSourceNames.Contains(s, StringComparer.OrdinalIgnoreCase)) is { } bad)
             throw new ToolException($"알 수 없는 출처입니다: '{bad}' (쓸 수 있는 것: {string.Join(", ", AllSourceNames)})");
         // 한 분류(CSV / opcode / 시그니처 복구)의 이름이 목록에 없으면 그 분류는 전부 쓴다
@@ -209,7 +207,7 @@ internal static class Prepare
         OpcodeCollector? opcodes = null;
         if (o.Opcodes)
         {
-            opcodes = new OpcodeCollector(ws, pluginPath, config, o.ForceIda, o.ForceLocalDiff, o.Overwrite, Pick(OpcodeCollector.SourceNames));
+            opcodes = new OpcodeCollector(ws, pluginPath, config, o.ForceIda, o.IdaFallback, o.Overwrite, Pick(OpcodeCollector.SourceNames));
             try
             {
                 foreach (var client in config.Clients)
@@ -289,6 +287,7 @@ internal static class Prepare
             SignatureCheckFailed = sigFailed,
             OpcodeDownloadFailure = opcodeFailure,
             SignatureDownloadFailure = Errors.DownloadFailure(sigFailures),
+            UnconfirmedOpcodes = [.. opcodes?.Unconfirmed ?? []],
         };
     }
 
@@ -392,8 +391,8 @@ internal static class Prepare
         Log.Info($"[snapshot] {Path.GetFileName(client.ExePath)} -> {rel}");
     }
 
-    // snapshots\<지역>\ 에서 지금 버전과 그 직전 버전 폴더만 남긴다 (비교는 직전 버전과만 하므로).
-    // 직전 버전은 대응표(직전 출시 버전)에 있는 것, 없으면 지금보다 앞선 것 중 가장 최근 것.
+    // snapshots\<지역>\ 에서 지금 버전과 그 직전 출시 폴더만 남긴다 (비교는 직전 출시와만 하므로).
+    // 직전 출시는 공식 패치 목록(Thaliak.PreviousRelease)에서, 모르면 지금보다 앞선 것 중 가장 최근 것.
     // 지금보다 새 버전 폴더(다른 설치본 등)는 건드리지 않는다.
     private static void PruneSnapshots(Workspace ws, Region region, string version, IReadOnlySet<string>? keepAlso = null)
     {
@@ -404,8 +403,10 @@ internal static class Prepare
             .Where(d => string.CompareOrdinal(Path.GetFileName(d), version) < 0)
             .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
             .ToList();
-        string? keep = GameVersions.Previous(version)?.Version is { } prev && older.Any(d => Path.GetFileName(d) == prev)
-            ? prev : older.Select(Path.GetFileName).FirstOrDefault();
+        string? prev = null;
+        try { prev = Thaliak.PreviousRelease(region, version); }
+        catch (Exception ex) when (Errors.Recoverable(ex)) { } // 모르면 가장 최근 것을 남긴다
+        string? keep = prev != null && older.Any(d => Path.GetFileName(d) == prev) ? prev : older.Select(Path.GetFileName).FirstOrDefault();
         older.RemoveAll(d => Path.GetFileName(d) == keep || keepAlso?.Contains(Path.GetFileName(d)) == true);
         foreach (string d in older)
         {

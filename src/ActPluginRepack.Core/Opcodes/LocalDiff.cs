@@ -11,9 +11,9 @@ using System.Text.RegularExpressions;
 //   - vtable_diff.py (minor_patch_diff.py 는 7.57 에서 분기문 시그니처가 안 맞음)
 //   - radare2 는 CI 가 쓰는 버전 그대로 (6.1.6 은 case 를 2개 덜 읽어 실패, 6.1.0 은 공개 diff 와 동일)
 //   - Python 3.12+ (Windows 에서 r2pipe 출력 동기화가 os.set_blocking 에 의존 — 3.11 은 멈춘다)
-// 옛 exe: snapshots\<지역>\<직전 버전>\ 이 있으면 그것, 없으면 그 지역의 Thaliak 패치 저장소에서 받아
-// 스냅샷으로 남긴다 (Thaliak.SnapshotExe). 직전 버전은 GameVersions 대응표 기준이다 — 한국 전용 중간 패치(예: 2026.10.02)는
-// opcode 가 달라 쓰면 안 된다.
+// 옛 exe(직전 출시, OpcodeCollector 가 Thaliak.PreviousRelease 로 고름): snapshots\<지역>\<그 버전>\ 이 있으면 그것, 없으면
+// 그 지역의 Thaliak 패치 저장소에서 받아 스냅샷으로 남긴다 (Thaliak.SnapshotExe). 패치 번호는 필요 없다 — 스크립트는 두 exe 를
+// 순서(옛 것, 새 것)로만 받는다.
 internal static class LocalDiff
 {
     private const string Raw = "https://raw.githubusercontent.com/xivdev/opcodediff/master";
@@ -26,13 +26,14 @@ internal static class LocalDiff
     private const string PortablePythonSha512 =
         "4c6121b914e95ad4627c3478aff18486683f70632ab7007890e0a4b754215e70a67431370e272dde22c9235c6bb0d4916d71b20b02c485eeaa6b945ddacdfbeb";
 
-    public static Dictionary<int, int> Run(Workspace ws, GameClient client, string retail, GameVersions.Entry prev,
-                                           string? pythonPath, bool overwrite)
+    // 옛 게임 버전(previous)의 exe -> 지금 exe 의 opcode 대응표 (옛 값 -> 새 값)
+    public static Dictionary<int, int> Run(Workspace ws, GameClient client, string previous, string? pythonPath, bool overwrite)
     {
         var region = client.Region!;
-        string work = Path.Combine(ws.SnapshotDir(region, client.Version!), "localdiff");
+        // 옛 버전마다 따로 캐시 (옛 버전 판단이 바뀌면 다시 돌리게)
+        string work = Path.Combine(ws.SnapshotDir(region, client.Version!), "localdiff", previous);
         string cache = Path.Combine(work, "diff.json");
-        string what = $"localdiff {region.Name} {prev.Retail} -> {retail}";
+        string what = $"localdiff {region.Name} {previous} -> {client.Version}";
         if (!overwrite && File.Exists(cache))
         {
             Log.Note($"[opcode] localdiff 결과 캐시 사용: {cache}");
@@ -51,11 +52,10 @@ internal static class LocalDiff
 
         string python = EnsureVenv(ws, pythonPath, File.ReadAllText(Path.Combine(work, "requirements-vtable.txt")));
         string r2bin = EnsureRadare2(ws);
-        string prevExe = Thaliak.SnapshotExe(ws, region, prev.Version);
+        string prevExe = Thaliak.SnapshotExe(ws, region, previous);
 
-        // vtable_diff 는 exe 파일 이름에서 패치 번호를 읽는다 (ffxiv_dx11.<패치>.exe)
-        string oldCopy = Path.Combine(work, $"ffxiv_dx11.{prev.Retail}.exe");
-        string newCopy = Path.Combine(work, $"ffxiv_dx11.{retail}.exe");
+        string oldCopy = Path.Combine(work, "ffxiv_dx11.old.exe");
+        string newCopy = Path.Combine(work, "ffxiv_dx11.new.exe");
         File.Copy(prevExe, oldCopy);
         File.Copy(client.ExePath, newCopy);
         try

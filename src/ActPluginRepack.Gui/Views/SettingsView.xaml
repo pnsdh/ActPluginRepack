@@ -71,7 +71,7 @@
                             <StackPanel>
                                 <TextBlock Text="로컬 opcodediff" FontWeight="SemiBold" />
                                 <TextBlock Style="{StaticResource Caption}"
-                                           Text="{Binding Source='공개본이 없을 때 opcode 를 직접 추출합니다(기본 켜짐). 스크립트·radare2 는 자동으로 받고, Python 3.12 이상이 없으면 휴대용 Python(약 14MB)도 받아 씁니다.', Converter={StaticResource KeepAll}}" />
+                                           Text="{Binding Source='지금 게임 exe 와 직전 출시 exe(공식 패치 서버에서 받음)를 비교해 opcode 를 직접 구합니다(기본 켜짐). 공개 자료가 나오기 전에도 되고, 나온 뒤에는 대조에 씁니다. 스크립트·radare2 는 자동으로 받고, Python 3.12 이상이 없으면 휴대용 Python(약 14MB)도 받아 씁니다.', Converter={StaticResource KeepAll}}" />
                                 <TextBlock Style="{StaticResource Caption}" Text="{Binding PythonStatus, Converter={StaticResource KeepAll}}" Margin="0,2,0,0" />
                             </StackPanel>
                             <ui:ToggleSwitch IsChecked="{Binding LocalDiff}" AutomationProperties.Name="로컬 opcodediff" HorizontalAlignment="Right" VerticalAlignment="Top" />

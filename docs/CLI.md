@@ -88,7 +88,7 @@ dotnet $cli hotfix                                   # 패치본 배포 묶음 (
 ```
 
 **prepare 옵션**: `--plugin <경로>` / `--no-plugin` / `--no-csv` / `--no-opcodes` / `--no-snapshot` / `--no-sigcheck` /
-`--no-repair` / `--ida` · `--localdiff` (공개본이 있어도 직접 추출해 대조) / `--ida-target <지역>` / `--overwrite`
+`--no-repair` / `--ida` (IDA 로 직접 추출해 그 결과를 우선) / `--ida-target <지역>` / `--overwrite`
 (SharpVision·oxidizer·IDA 캐시와 받은 파일 기억을 무시하고 다시) / `--sources a,b` (쓸 출처 제한, 검증용 — CSV:
 `oxidizer`·`sharpvision`·`datamining`·`xivdata`, opcode: `yarukon`·`opcodediff`·`localdiff`·`ida`·`karashiiro`, 시그니처 복구:
 `upstream`·`sigregen`; 한 분류의 이름이 없으면 그 분류는 전부 사용).

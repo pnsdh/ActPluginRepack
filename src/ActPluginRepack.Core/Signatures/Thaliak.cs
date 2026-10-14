@@ -255,6 +255,41 @@ internal static class Thaliak
             .Distinct().OrderByDescending(v => v, StringComparer.Ordinal).ToList();
     }
 
+    // 이 지역의 출시 목록 (게임 버전, 오래된 것부터). 패치는 출시 전에 여러 개로 나눠 미리 만들어 두었다가 출시 때 한꺼번에
+    // 내려준다 (7.57: 2026.09.29 / 10.02 / 10.06 을 2026-10-13 에) — 처음 내려준 시각(first_offered)이 같은 패치 묶음이 출시 한 번,
+    // 그 안의 가장 큰 버전이 출시 후의 게임 버전이다. 미리 만든 패치나 한국 전용 중간 패치는 묶음 안에 있어 출시로 세지 않는다.
+    // 버전 문자열의 날짜는 출시일이 아니다 (SE 의 빌드 날짜로 보임 — 7.57 은 10.06 빌드, 10-13 출시).
+    public static List<string> Releases(Region region) =>
+        Supports(region) ? ReleasesOf(Patches(RepoOf(region)).Select(p => (p.Version, p.Offered))) : [];
+
+    internal static List<string> ReleasesOf(IEnumerable<(string Version, string? Offered)> patches) =>
+        patches.Where(p => GameVersion.IsValid(p.Version))
+            .GroupBy(p => p.Offered ?? p.Version) // 시각이 없으면 패치 하나를 출시 하나로
+            .Select(g => g.Select(p => p.Version).Max(StringComparer.Ordinal)!)
+            .Distinct().OrderBy(v => v, StringComparer.Ordinal).ToList();
+
+    // version 바로 앞 출시의 게임 버전 (로컬 opcodediff·시그니처 재생성이 지금 exe 와 맞댈 옛 exe). 없으면 null.
+    // version 이 속한 출시(같은 묶음)는 빼므로, 지금 버전이 아직 이 목록에 없어도(Thaliak 이 늦음) 구할 수 있다.
+    public static string? PreviousRelease(Region region, string version) => PreviousOf(Releases(region), version);
+
+    internal static string? PreviousOf(IReadOnlyList<string> releases, string version) => EarlierOf(releases, version).FirstOrDefault();
+
+    // version 이 나온 출시를 처음 내려준 시각 (UTC). 이 버전이 아직 목록에 없거나 시각이 없으면 null.
+    public static DateTime? ReleasedAt(Region region, string version) =>
+        Supports(region) ? ReleasedAtOf(Patches(RepoOf(region)).Select(p => (p.Version, p.Offered)), version) : null;
+
+    internal static DateTime? ReleasedAtOf(IEnumerable<(string Version, string? Offered)> patches, string version) =>
+        patches.Where(p => p.Offered != null && p.Version.Length >= 15 && version.Length >= 15 && p.Version[..15] == version[..15])
+            .Select(p => (DateTime?)DateTime.Parse(p.Offered!, System.Globalization.CultureInfo.InvariantCulture,
+                                                   System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal))
+            .Min();
+
+    // version 앞의 출시들 (가까운 것부터)
+    public static List<string> EarlierReleases(Region region, string version) => EarlierOf(Releases(region), version);
+
+    internal static List<string> EarlierOf(IReadOnlyList<string> releases, string version) =>
+        releases.Where(r => IsOlder(r, version)).Reverse().ToList();
+
     // 이 지역의 최신 게임 버전 (공식 패치 서버에 올라온 마지막 패치). Thaliak 이 이 지역을 모르면 null.
     // 출시 전에 미리 배포되는 패치도 출시 때 함께 올라오므로(7.57 의 09.29 / 10.02 / 10.06 — 2025~2026 글로벌 기록에서 출시 전에
     // 먼저 보인 패치는 없었다) 이것이 지금 서버 버전이다. 런처가 지금 내려주는(is_active) 패치만 본다.
@@ -276,7 +311,7 @@ internal static class Thaliak
         ?? throw new ToolException($"Thaliak 에 {region.Name} 지역의 {patch} 패치가 없습니다.");
 
     // 저장소의 패치 목록 (버전 문자열, 주소, 지금 내려주는지). 형식이 바뀌었으면 ToolException.
-    private static List<(string Version, string Url, bool Active)> Patches(string repo)
+    private static List<(string Version, string Url, bool Active, string? Offered)> Patches(string repo)
     {
         string api = $"https://thaliak.xiv.dev/api/v2beta/repositories/{repo}/patches";
         try
@@ -288,7 +323,9 @@ internal static class Thaliak
                               Url: p.GetProperty("remote_url").GetString()
                                    ?? throw new ToolException($"Thaliak 응답에 주소가 없는 패치가 있습니다 ({api})."),
                               // 지금 런처가 내려주는 패치인지 (없으면 그렇다고 본다)
-                              Active: !p.TryGetProperty("is_active", out var a) || a.ValueKind != JsonValueKind.False))
+                              Active: !p.TryGetProperty("is_active", out var a) || a.ValueKind != JsonValueKind.False,
+                              // 처음 내려준 시각 (출시 묶음을 가른다 — Releases)
+                              Offered: p.TryGetProperty("first_offered", out var o) && o.ValueKind == JsonValueKind.String ? o.GetString() : null))
                 .ToList();
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)

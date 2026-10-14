@@ -55,8 +55,7 @@ internal sealed partial class HomeViewModel : ObservableObject
         CanRestore = s.RestorableBackup != null; // 되돌릴 수 있는 백업만 (설치한 뒤로 ACT 의 플러그인이 바뀌었으면 없음)
         var details = s.Clients.Select(c => $"{Region.LabelOf(c.Region)} 클라이언트: {c.Version ?? "버전 모름"}" +
                                             (s.Prepared?.IsOutdated(c) == true ? " (최신 버전이 아니라 지난 확인에서 제외)" : ""))
-            .Append(s.Act != null ? $"ACT 의 FFXIV 플러그인: {s.Act.InstalledVersion ?? "?"}{(s.InstalledIsOurs == true ? " (이 프로그램의 패치본)" : "")}" +
-                                    (s.Act.Others.Count > 0 ? " - 해루봇의 한국·글로벌 서버용 모두" : "") : "ACT: 찾지 못함")
+            .Append(s.Act != null ? $"ACT 의 FFXIV 플러그인: {ActVersions(s.Act)}{(s.InstalledIsOurs == true ? " (이 프로그램의 패치본)" : "")}" : "ACT: 찾지 못함")
             .Concat(AppState.WorkspaceFallback is { } fallback ? [fallback] : Array.Empty<string>())
             .ToList();
         Details = string.Join("\n", details);
@@ -129,6 +128,23 @@ internal sealed partial class HomeViewModel : ObservableObject
                 "버튼을 누르면 고칠 필요가 있는지 확인하고, 필요하면 고친 플러그인을 만들어 ACT 에 설치까지 합니다.\n" +
                 "시작하기 전에 ACT 와 게임을 끄세요.", "확인하고 고치기", true);
     }
+
+    // 설치된 버전. 해루봇의 언어별 폴더가 여럿이면 같을 때만 하나로, 다르면 폴더마다 ("한국 3.0.3.1 / 글로벌 3.0.3.3")
+    private static string ActVersions(ActTarget act)
+    {
+        if (act.Others.Count == 0) return act.InstalledVersion ?? "?";
+        var each = act.PluginPaths.Select(f => (Folder: FolderLabel(System.IO.Path.GetDirectoryName(f)!), Version: MaterialState.PluginVersionOf(f) ?? "?")).ToList();
+        return each.Select(e => e.Version).Distinct().Count() == 1
+            ? $"{each[0].Version} - 해루봇의 {string.Join("·", each.Select(e => e.Folder))} 서버용 모두"
+            : string.Join(" / ", each.Select(e => $"{e.Folder} {e.Version}"));
+    }
+
+    private static string FolderLabel(string dir) => System.IO.Path.GetFileName(dir) switch
+    {
+        var n when n.EndsWith("_KR", StringComparison.OrdinalIgnoreCase) => "한국",
+        var n when n.EndsWith("_Global", StringComparison.OrdinalIgnoreCase) => "글로벌",
+        var n => n,
+    };
 
     private void Set(ResultKind kind, string headline, string description, string primary, bool canFix)
     {
