@@ -185,7 +185,7 @@ dotnet $cli sigregen --old <옛 exe> --new <새 exe> --pattern "E8 $ { ' } 4C 8B
 `install` 은 `output\` 의 결과를 ACT 의 FFXIV 플러그인 폴더에 넣고, `extras\OverlayPlugin\opcodes.jsonc` 가 있으면
 OverlayPlugin 의 `resources\` 에도 넣는다. 위치는 ACT 설정
 (`%APPDATA%\Advanced Combat Tracker\Config\Advanced Combat Tracker.config.xml`)에 등록된 `FFXIV_ACT_Plugin.dll` /
-`OverlayPlugin.dll` 에서 찾는다.
+`OverlayPlugin.dll` 에서 찾는다. 해루봇의 언어별 폴더면 다른 언어 폴더도 함께 넣는다(아래 **해루봇**).
 
 - **ACT 와 게임이 꺼져 있어야** 한다 — 플러그인 DLL 은 ACT 가, deucalion 은 게임이 잡고 있다.
 - 바꾸거나 지우는 원래 파일은 `backups\<시각>\` 에 복사하고 무엇을 했는지 `backup.json` 에 남긴다(넣은 파일의 SHA256 포함).
@@ -206,7 +206,7 @@ OverlayPlugin 의 `resources\` 에도 넣는다. 위치는 ACT 설정
 `restore` 는 아직 되돌리지 않은 가장 최근 백업(또는 `--backup <폴더>` — 상대 경로는 작업 폴더 기준)으로 되돌린다.
 
 - 설치한 뒤로 ACT 의 플러그인이 다른 것으로 바뀌었으면(해루봇의 플러그인 업데이트 등) 되돌리지 않는다 — 옛 버전으로
-  내려가므로. 이미 원래 파일로 돌아가 있는 것은 바뀐 것으로 보지 않는다(되돌리기가 도중에 막혔다면 다시 하면 마저 된다).
+  내려가므로. 플러그인 폴더가 여럿이면 바뀐 폴더만 그대로 두고 나머지를 되돌린다(모두 바뀌었으면 되돌리지 않음). 이미 원래 파일로 돌아가 있는 것은 바뀐 것으로 보지 않는다(되돌리기가 도중에 막혔다면 다시 하면 마저 된다).
   해루봇이 덮어쓰는 OverlayPlugin opcode 처럼 그 뒤 바뀐 다른 파일은 그대로 둔다.
 - 백업 기록은 사용자가 쓸 수 있는 곳에 있는데 되돌리기는 관리자 권한으로 돌 수 있으므로, 기록이 가리키는 곳이 실제
   ACT 플러그인 폴더 / OverlayPlugin `resources` 이고 파일 이름만 담았는지 먼저 검사한다. 원래 파일의 사본이 없어졌으면
@@ -214,8 +214,15 @@ OverlayPlugin 의 `resources\` 에도 넣는다. 위치는 ACT 설정
 - 되돌릴 수 있는지는 관리자 권한을 청하기 전에 판단한다. GUI 는 되돌릴 수 없으면 버튼을 숨긴다.
 
 **해루봇**: 플러그인은 `<ACT>\Plugins\FFXIV_ACT_Plugin_KR` (또는 `_Global` / `_CN`) 에 있고, 해루봇은 "ACT 실행" 때마다 ACT
-설정이 그 파일을 가리키게 되돌린다 — 그래서 이 도구는 그 파일을 제자리에서 바꾼다. 해루봇에서 FFXIV 플러그인을 업데이트하면
-그 폴더를 통째로 지우고 공식본을 다시 받는다. 해루봇이 켜져 있는 동안은 ACT 를 강제로 끈다.
+설정이 고른 언어의 그 파일을 가리키게 되돌린다 — 그래서 이 도구는 그 파일을 제자리에서 바꾼다. 해루봇에서 FFXIV 플러그인을
+업데이트하면 그 폴더를 통째로 지우고 공식본을 다시 받는다. 해루봇이 켜져 있는 동안은 ACT 를 강제로 끈다.
+
+- `_KR` / `_Global` 은 같은 공식 플러그인(ravahn/FFXIV_ACT_Plugin)이라, ACT 설정이 둘 중 하나를 가리키면 `FFXIV_ACT_Plugin.dll`
+  이 있는 다른 쪽도 함께 설치한다(설치한 뒤 해루봇에서 언어를 바꿔도 패치본이 쓰이게). 백업은 하나에 모두 담고, 되돌리기도
+  한 번에 한다. 다른 쪽에 더 새 플러그인이 있으면(그 언어만 먼저 업데이트) 그 폴더는 뺀다.
+- `_CN` 은 중국판에 맞춰 고친 다른 플러그인(TundraWork/FFXIV_ACT_Plugin_CN)이라 쓰지 않는다. ACT 설정이 `_CN` 을 가리키면
+  `_KR` / `_Global` 만 설치하고, 둘 다 없으면 설치하지 않는다(`--target` 으로 직접 줘도 거부).
+- 예전에 한 폴더에만 설치했으면, 다시 설치할 때 나머지 폴더를 그 백업에 보탠다.
 
 ## 네트워크
 

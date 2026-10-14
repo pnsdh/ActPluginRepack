@@ -26,6 +26,7 @@
                                    FontSize="16" Padding="24,10" Command="{Binding FixCommand}" IsEnabled="{Binding CanFix}" />
                         <ui:Button Content="새로 고침" Icon="{ui:SymbolIcon ArrowClockwise24}" Margin="12,0,0,0" Padding="16,10"
                                    Appearance="Transparent" Command="{Binding RefreshCommand}"
+                                   Visibility="{Binding ShowRefresh, Converter={StaticResource Visible}}"
                                    ToolTip="화면의 정보만 다시 읽습니다 (인터넷을 쓰지 않음)" />
                     </StackPanel>
                 </StackPanel>

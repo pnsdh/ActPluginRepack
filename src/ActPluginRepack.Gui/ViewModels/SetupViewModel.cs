@@ -71,7 +71,7 @@ internal sealed partial class SetupViewModel : ObservableObject
         {
             var act = Install.ResolveTarget(null);
             ActFound = true;
-            ActStatus = $"ACT 의 FFXIV 플러그인을 찾았습니다: {act.PluginDir}";
+            ActStatus = $"ACT 의 FFXIV 플러그인을 찾았습니다: {string.Join(", ", act.PluginDirs)}";
         }
         // 등록돼 있지 않은 것만 "먼저 설치"로 안내하고, 나머지(켜진 것이 여러 개, 파일이 없음, ACT 설정 파일이 깨짐)는 그 이유를 보인다
         catch (Exception ex) when (Errors.Recoverable(ex))
@@ -85,6 +85,8 @@ internal sealed partial class SetupViewModel : ObservableObject
                 ActProblem.MultipleEnabled =>
                     $"ACT 에 FFXIV 플러그인이 여러 개 켜져 있습니다. ACT 의 Plugins 탭에서 쓰지 않는 것을 끄세요. (나중에 해도 됩니다)\n{Friendly.EnabledPlugins(target.Paths)}",
                 // 원문(XML 오류)은 고급 모드의 상태와 명령줄에만
+                ActProblem.ChineseOnly =>
+                    "해루봇의 중국 서버용 FFXIV 플러그인만 있습니다. 이 프로그램은 한국·글로벌 서버용(공식) 플러그인만 고칩니다. (나중에 해도 됩니다)",
                 ActProblem.ConfigUnreadable =>
                     "ACT 설정 파일을 읽지 못했습니다. ACT 를 한 번 실행했다가 끈 뒤 다시 하세요. (나중에 해도 됩니다)",
                 _ => $"ACT 의 FFXIV 플러그인을 확인하지 못했습니다: {Errors.Describe(ex)}\n" +

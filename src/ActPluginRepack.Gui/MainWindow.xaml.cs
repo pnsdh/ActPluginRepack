@@ -9,6 +9,13 @@ public partial class MainWindow
         InitializeComponent();
         DataContext = new MainViewModel();
         Closing += OnClosing;
+        Activated += OnActivated;
+    }
+
+    // 다른 창(해루봇, 런처, ACT)에서 무언가를 바꾸고 돌아오면 첫 화면을 저절로 다시 읽는다
+    private void OnActivated(object? sender, EventArgs e)
+    {
+        if (DataContext is MainViewModel { CurrentPage: HomeViewModel home }) home.Reload();
     }
 
     // 작업 중에 창을 닫으면 백그라운드 작업이 도중에 끊긴다 (설치 중이면 ACT 의 파일이 반쯤 바뀐 채로) -> 닫지 않고 알린다

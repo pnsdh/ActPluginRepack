@@ -60,7 +60,7 @@ internal sealed class GameOutdatedException(IReadOnlyList<OutdatedClient> client
 }
 
 // ACT 의 FFXIV 플러그인 위치를 정하지 못함 — 화면이 경우마다 다르게 안내하도록 종류를 같이 준다
-internal enum ActProblem { NotRegistered, MultipleEnabled, FileMissing, ConfigUnreadable }
+internal enum ActProblem { NotRegistered, MultipleEnabled, FileMissing, ConfigUnreadable, ChineseOnly }
 
 // Paths: 켜진 것이 여러 개일 때 그 폴더들 (화면이 메시지 대신 목록만 보인다 — 메시지의 "직접 지정"은 CLI 용)
 internal sealed class ActTargetException(ActProblem problem, string message, IReadOnlyList<string>? paths = null) : ToolException(message)

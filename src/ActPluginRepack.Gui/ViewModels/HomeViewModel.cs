@@ -8,14 +8,17 @@ internal sealed partial class HomeViewModel : ObservableObject
 {
     public HomeViewModel()
     {
-        Refresh();
+        Reload();
     }
 
     [ObservableProperty] private ResultKind _kind;
     [ObservableProperty] private string _headline = "";
     [ObservableProperty] private string _description = "";
     [ObservableProperty] private string _primaryText = "확인하고 고치기";
-    [ObservableProperty] private bool _canFix = true;
+    // 주 버튼을 누를 수 없는 상태(ACT 를 찾지 못함 등)에서만 [새로 고침]을 보인다 — 안내대로 고친 뒤 누르도록.
+    // 누를 수 있으면 주 버튼이 다시 확인까지 하므로 둘이 헷갈리기만 한다 (창으로 돌아오면 저절로 다시 읽기도 한다).
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowRefresh))] private bool _canFix = true;
+    public bool ShowRefresh => !CanFix;
     [ObservableProperty] private bool _canRestore;
     [ObservableProperty] private string _details = "";
     [ObservableProperty] private string? _notice; // 버튼을 누르기 전에 막힌 이유 (ACT 실행 중 등)
@@ -26,8 +29,14 @@ internal sealed partial class HomeViewModel : ObservableObject
     [RelayCommand]
     private void Refresh()
     {
-        Notice = null;
         Info = null;
+        Reload();
+    }
+
+    // 지금 상태를 다시 읽는다. 다른 화면에서 넘어온 알림(Info)은 남긴다 — 창으로 돌아올 때마다 부른다.
+    public void Reload()
+    {
+        Notice = null;
         _primaryOpensSetup = false;
         // 작업 폴더나 ACT 파일을 읽지 못해도(권한, 잠긴 파일 등) 화면이 오류로 멈추지 않고 그 이유를 보인다
         try { Show(Status.Collect(AppState.Workspace)); }
@@ -46,7 +55,8 @@ internal sealed partial class HomeViewModel : ObservableObject
         CanRestore = s.RestorableBackup != null; // 되돌릴 수 있는 백업만 (설치한 뒤로 ACT 의 플러그인이 바뀌었으면 없음)
         var details = s.Clients.Select(c => $"{Region.LabelOf(c.Region)} 클라이언트: {c.Version ?? "버전 모름"}" +
                                             (s.Prepared?.IsOutdated(c) == true ? " (최신 버전이 아니라 지난 확인에서 제외)" : ""))
-            .Append(s.Act != null ? $"ACT 의 FFXIV 플러그인: {s.Act.InstalledVersion ?? "?"}{(s.InstalledIsOurs == true ? " (이 프로그램의 패치본)" : "")}" : "ACT: 찾지 못함")
+            .Append(s.Act != null ? $"ACT 의 FFXIV 플러그인: {s.Act.InstalledVersion ?? "?"}{(s.InstalledIsOurs == true ? " (이 프로그램의 패치본)" : "")}" +
+                                    (s.Act.Others.Count > 0 ? " - 해루봇의 한국·글로벌 서버용 모두" : "") : "ACT: 찾지 못함")
             .Concat(AppState.WorkspaceFallback is { } fallback ? [fallback] : Array.Empty<string>())
             .ToList();
         Details = string.Join("\n", details);
@@ -81,6 +91,11 @@ internal sealed partial class HomeViewModel : ObservableObject
                 Set(ResultKind.Warning, "ACT 에 FFXIV 플러그인이 여러 개 켜져 있습니다",
                     "어느 것을 고칠지 정할 수 없습니다. ACT 의 Plugins 탭에서 쓰지 않는 FFXIV 플러그인을 끄거나 지운 뒤 [새로 고침]을 누르세요.\n" +
                     Friendly.EnabledPlugins(s.ActPaths), "확인하고 고치기", canFix: false);
+            else if (s.ActProblem == ActProblem.ChineseOnly)
+                Set(ResultKind.Warning, "중국 서버용 FFXIV 플러그인은 고칠 수 없습니다",
+                    "해루봇의 중국 서버용 FFXIV 플러그인은 공식 플러그인을 따로 고친 것이라 이 프로그램이 다루지 않습니다.\n" +
+                    "한국이나 글로벌 서버에서 쓰려면 해루봇에서 그 서버용 FFXIV 플러그인을 설치한 뒤 [새로 고침]을 누르세요.",
+                    "확인하고 고치기", canFix: false);
             else if (s.ActProblem == ActProblem.ConfigUnreadable) // 원문(XML 오류)은 고급 모드의 상태에만
                 Set(ResultKind.Warning, "ACT 설정 파일을 읽지 못했습니다",
                     "ACT 를 한 번 실행했다가 끈 뒤 [새로 고침]을 누르세요. 그래도 안 되면 해루봇이나 ACT 에서 FFXIV 플러그인을 다시 설치하세요.",

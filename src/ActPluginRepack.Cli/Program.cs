@@ -100,7 +100,9 @@ internal static class Program
               build    input\ 으로 output\FFXIV_ACT_Plugin.dll 만들기 (CSV 변환 + 주입 + 부속 파일)
                          --plugin <dll> --no-csv
               install  output\ 를 ACT 의 FFXIV 플러그인 폴더에 설치 (원래 파일은 backups\ 에)
-                         --target <플러그인 폴더> (생략 시 ACT 설정에서 찾음)  --overlay <OverlayPlugin resources 폴더 | ->
+                         --target <플러그인 폴더> (여러 번 줄 수 있음. 생략 시 ACT 설정에서 찾음 - 해루봇이면
+                                                   한국·글로벌 서버용 폴더 모두, 중국 서버용은 제외)
+                         --overlay <OverlayPlugin resources 폴더 | ->
                          extras 의 OverlayPlugin opcodes.jsonc 도 넣는다. ACT 와 게임을 끄고 실행 (켜져 있으면 exit 4).
                          같은 파일이 이미 설치되어 있으면 아무것도 하지 않는다.
                          --official  패치본 대신 input\plugin 의 공식 최신본을 설치 (공식이 이미 게임과 맞을 때,

@@ -8,6 +8,9 @@ using System.Xml.Linq;
 // 찾는다. 해루봇도 이 방식으로 등록한다(Plugins\FFXIV_ACT_Plugin_KR 등 언어별 폴더).
 //   - FFXIV 플러그인: output\ 의 DLL 들을 FFXIV_ACT_Plugin.dll 이 있는 폴더에 제자리 교체. 해루봇은 ACT 를 실행할 때마다
 //     ACT 설정을 그 폴더의 FFXIV_ACT_Plugin.dll 로 되돌리므로 다른 곳에 두면 안 된다.
+//   - 해루봇은 FFXIV 플러그인을 언어마다 Plugins\FFXIV_ACT_Plugin_KR / _Global / _CN 에 따로 두고, ACT 를 실행할 때 고른
+//     언어의 폴더로 ACT 설정을 바꾼다. KR / Global 은 같은 공식 플러그인이라 함께 설치한다(설치한 뒤 언어를 바꿔도 패치본이
+//     쓰이게). _CN 은 중국판에 맞춰 고친 다른 플러그인(TundraWork/FFXIV_ACT_Plugin_CN)이라 건드리지 않는다.
 //   - OverlayPlugin(있으면): extras\OverlayPlugin\opcodes.jsonc 를 OverlayPlugin.dll 옆 resources\ 에. 해루봇은 시작할
 //     때마다 이 파일을 OverlayPlugin 배포본으로 덮어쓰지만, ACT 를 직접 쓰면 그대로 적용된다.
 // 해루봇에서 플러그인을 "업데이트"하면 플러그인 폴더를 통째로 지우고 공식본을 다시 받으므로 백업은 프로젝트의
@@ -16,10 +19,14 @@ using System.Xml.Linq;
 // deucalion: 플러그인은 시작할 때 같은 폴더의 deucalion-*.distrib.dll 이 있으면 기존 deucalion-*.dll 을 지우고 이름을
 // 바꿔 쓴다. 그래서 패치본은 distrib 이름으로 넣고, 옛 .dll 은 백업한 뒤 치운다. 게임이 deucalion 을 잡고 있으면
 // 교체가 안 되므로 ACT 와 게임이 모두 꺼져 있어야 설치한다.
+// Others: 함께 설치할 다른 언어 폴더 (해루봇의 KR / Global 중 ACT 설정에 적히지 않은 쪽)
 internal sealed record ActTarget(string PluginPath, bool Enabled)
 {
     public string PluginDir => Path.GetDirectoryName(PluginPath)!;
     public string? InstalledVersion => MaterialState.PluginVersionOf(PluginPath);
+    public IReadOnlyList<string> Others { get; init; } = [];
+    public IReadOnlyList<string> PluginDirs => [PluginDir, .. Others];
+    public IReadOnlyList<string> PluginPaths => [.. PluginDirs.Select(d => Path.Combine(d, PluginRelease.PluginFile))];
 }
 
 // 설치할 곳 (관리자 권한으로 다시 실행할 때 그대로 넘긴다).
@@ -29,7 +36,8 @@ internal sealed record InstallPlan(ActTarget Plugin, string? OverlayResources, b
 {
     // 관리자 권한으로 다시 실행할 때 CLI install 에 넘길 인자 (정한 대상을 그대로: "-" 는 OverlayPlugin 건너뜀)
     public string[] ToCliArgs(Workspace ws) =>
-        ["--root", ws.Root, "--target", Plugin.PluginDir, "--overlay", OverlayResources ?? "-", .. (Official ? new[] { "--official" } : [])];
+        ["--root", ws.Root, .. Plugin.PluginDirs.SelectMany(d => new[] { "--target", d }), "--overlay", OverlayResources ?? "-",
+         .. (Official ? new[] { "--official" } : [])];
 }
 
 internal sealed record InstallResult(InstallPlan Plan, string BackupDir, IReadOnlyList<string> Files);
@@ -61,15 +69,21 @@ internal static class Install
             .ToList();
     }
 
-    // FFXIV 플러그인 위치: 직접 준 폴더, 아니면 ACT 설정에서 켜진 것
-    public static ActTarget ResolveTarget(string? pluginDir)
+    // FFXIV 플러그인 위치: 직접 준 폴더들(그대로), 아니면 ACT 설정에서 켜진 것 (해루봇이면 다른 언어 폴더도)
+    public static ActTarget ResolveTarget(IReadOnlyList<string>? pluginDirs)
     {
-        if (pluginDir != null)
+        if (pluginDirs is { Count: > 0 })
         {
-            string path = Path.Combine(Path.GetFullPath(pluginDir), PluginRelease.PluginFile);
-            // 관리자 권한 재실행도 이 경로로 온다 — FFXIV 플러그인이 실제로 있는 폴더만 (엉뚱한 폴더에 쓰지 않게)
-            if (!File.Exists(path)) throw new ToolException($"FFXIV_ACT_Plugin.dll 이 있는 폴더가 아닙니다: {pluginDir}");
-            return new ActTarget(path, Enabled: true);
+            var dirs = new List<string>();
+            foreach (string d in pluginDirs)
+            {
+                string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(d));
+                // 관리자 권한 재실행도 이 경로로 온다 — FFXIV 플러그인이 실제로 있는 폴더만 (엉뚱한 폴더에 쓰지 않게)
+                if (!File.Exists(Path.Combine(full, PluginRelease.PluginFile))) throw new ToolException($"FFXIV_ACT_Plugin.dll 이 있는 폴더가 아닙니다: {d}");
+                if (HaerubotDirName(full) == HaerubotCnDir) throw new ToolException($"{CnUnsupported} ({full})");
+                if (!dirs.Any(x => SamePath(x, full))) dirs.Add(full);
+            }
+            return new ActTarget(Path.Combine(dirs[0], PluginRelease.PluginFile), Enabled: true) { Others = dirs.Skip(1).ToList() };
         }
         var targets = FindPlugins(PluginRelease.PluginFile);
         if (targets.Count == 0)
@@ -79,9 +93,36 @@ internal static class Install
             throw new ActTargetException(ActProblem.MultipleEnabled, $"켜진 FFXIV_ACT_Plugin 이 여러 개입니다. 설치할 폴더를 직접 지정하세요: {string.Join(", ", enabled.Select(t => t.PluginDir))}",
                                          enabled.Select(t => t.PluginDir).ToList());
         var target = enabled.FirstOrDefault() ?? targets[0];
+        if (HaerubotDirName(target.PluginDir) is { } name)
+        {
+            // 해루봇: 공식 플러그인이 든 다른 언어 폴더도 함께 (ACT 설정이 중국 서버용을 가리키면 공식 플러그인 폴더만)
+            string plugins = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(target.PluginDir)))!;
+            var langs = HaerubotDirs.Select(n => Path.Combine(plugins, n))
+                .Where(d => !SamePath(d, target.PluginDir) && File.Exists(Path.Combine(d, PluginRelease.PluginFile))).ToList();
+            if (name == HaerubotCnDir)
+            {
+                if (langs.Count == 0) throw new ActTargetException(ActProblem.ChineseOnly, $"{CnUnsupported} ({target.PluginDir})");
+                return new ActTarget(Path.Combine(langs[0], PluginRelease.PluginFile), target.Enabled) { Others = langs.Skip(1).ToList() };
+            }
+            target = target with { Others = langs };
+        }
         if (!File.Exists(target.PluginPath))
             throw new ActTargetException(ActProblem.FileMissing, $"ACT 설정에 적힌 플러그인 파일이 없습니다: {target.PluginPath}");
         return target;
+    }
+
+    private static readonly string[] HaerubotDirs = ["FFXIV_ACT_Plugin_KR", "FFXIV_ACT_Plugin_Global"];
+    private const string HaerubotCnDir = "FFXIV_ACT_Plugin_CN";
+    private const string CnUnsupported = "해루봇의 중국 서버용 FFXIV 플러그인(FFXIV_ACT_Plugin_CN)은 공식 플러그인을 고친 다른 플러그인이라 설치하지 않습니다. " +
+                                         "한국·글로벌 서버용 FFXIV 플러그인을 해루봇에서 설치한 뒤 다시 하세요.";
+
+    // ACT\Plugins 아래 해루봇의 언어별 폴더면 그 이름 (아니면 null)
+    private static string? HaerubotDirName(string dir)
+    {
+        string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        if (!Path.GetFileName(Path.GetDirectoryName(full) ?? "").Equals("Plugins", StringComparison.OrdinalIgnoreCase)) return null;
+        string name = Path.GetFileName(full);
+        return HaerubotDirs.Append(HaerubotCnDir).FirstOrDefault(n => n.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
     // OverlayPlugin 의 resources 폴더 (켜진 OverlayPlugin.dll 옆). 없으면 null.
@@ -143,19 +184,41 @@ internal static class Install
                     added.Add(name);
                 hashes[name] = sourceHash[source];
             }
+            // 치울 옛 deucalion (나중에 보탠 다른 언어 폴더): 우리가 넣었던 것이 아니면 원래 파일로 담는다
+            foreach (string name in c.Remove)
+            {
+                string f = Path.Combine(c.Dir, name);
+                if (!File.Exists(f) || hashes.ContainsValue(Sha256Of(f))) continue;
+                File.Copy(f, Path.Combine(store, name), overwrite: true);
+                ClearReadOnly(Path.Combine(store, name));
+                if (!existed.Contains(name, StringComparer.OrdinalIgnoreCase)) existed.Add(name);
+                added.RemoveAll(n => n.Equals(name, StringComparison.OrdinalIgnoreCase));
+            }
             t = t with { Existed = existed, Added = added, Hashes = hashes };
             if (i >= 0) targets[i] = t; else targets.Add(t);
         }
         (m with { Targets = targets }).Save(backup);
 
         var again = new List<string>();
-        foreach (var c in pending)
-            foreach (var (source, name) in c.Put)
+        try
+        {
+            foreach (var c in pending)
             {
-                ReplaceFile(source, Path.Combine(c.Dir, name));
-                again.Add(Path.Combine(c.Dir, name));
-                Log.Info($"[install] {name} -> {c.Dir}");
+                foreach (string name in c.Remove) DeleteFile(Path.Combine(c.Dir, name));
+                foreach (var (source, name) in c.Put)
+                {
+                    ReplaceFile(source, Path.Combine(c.Dir, name));
+                    again.Add(Path.Combine(c.Dir, name));
+                    Log.Info($"[install] {name} -> {c.Dir}");
+                }
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 원래 파일은 이미 백업에 있다 — 되돌리기로 설치 전으로 돌아갈 수 있다
+            throw new ToolException("설치 중 파일을 쓰지 못했습니다. ACT 와 게임을 끈 뒤 다시 설치하거나, 되돌리기(화면의 [설치 전으로 되돌리기], " +
+                                    $"명령줄의 restore)로 설치 전으로 돌리세요. 백업: {backup} ({ex.Message})");
+        }
         Log.Done($"[install] 플러그인은 이미 설치되어 있어 바뀐 파일만 다시 넣음 (원래 파일 백업: {backup})");
         return new InstallResult(plan, backup, again);
     }
@@ -186,30 +249,31 @@ internal static class Install
         return c.Remove.All(renamed.Contains);
     }
 
-    // 무엇을 어디에 설치할지. pluginDir / overlayResources 를 주면 그대로 쓴다 (관리자 권한 재실행 때).
+    // 무엇을 어디에 설치할지. pluginDirs / overlayResources 를 주면 그대로 쓴다 (관리자 권한 재실행 때).
     // overlayResources 가 "-" 면 OverlayPlugin 은 건너뛴다.
-    public static InstallPlan Plan(Workspace ws, string? pluginDir = null, string? overlayResources = null, bool official = false)
+    public static InstallPlan Plan(Workspace ws, IReadOnlyList<string>? pluginDirs = null, string? overlayResources = null, bool official = false)
     {
         if (official)
         {
             if (!File.Exists(ws.PluginPath))
                 throw new ToolException(@"input\plugin 에 공식 플러그인이 없습니다. 먼저 다시 확인(prepare)하세요.");
-            var target = ResolveTarget(pluginDir);
+            var target = ResolveTarget(pluginDirs);
             // ACT 쪽이 더 새 버전이면 옛 공식본으로 내리지 않는다
-            if (Version.TryParse(target.InstalledVersion, out var have) && Version.TryParse(MaterialState.PluginVersionOf(ws.PluginPath), out var latest) &&
-                have > latest)
+            var latest = VersionOf(ws.PluginPath);
+            if (VersionOf(target.PluginPath) is { } have && latest != null && have > latest)
                 throw new ToolException($"ACT 에 더 새 플러그인({have})이 설치되어 있어 공식 플러그인 {latest} 버전으로 바꾸지 않습니다.");
-            return new InstallPlan(target, null, Official: true); // OverlayPlugin 은 건드리지 않는다
+            return new InstallPlan(WithoutNewer(target, latest), null, Official: true); // OverlayPlugin 은 건드리지 않는다
         }
         if (!File.Exists(ws.OutputPluginPath))
             throw new ToolException(@"output\ 에 빌드 결과가 없습니다. 먼저 build 를 실행하세요.");
-        var plugin = ResolveTarget(pluginDir);
+        var plugin = ResolveTarget(pluginDirs);
         // 옛 베이스로 만든 패치본으로 ACT 의 더 새 플러그인을 덮지 않는다 (공식 플러그인 받기가 막혀 옛 베이스로
         // 빌드했는데 해루봇은 이미 새 공식본을 받은 경우 등). 이 프로그램이 설치한 패치본은 같은 버전 번호를 쓴다.
-        if (Version.TryParse(plugin.InstalledVersion, out var installed) &&
-            Version.TryParse(MaterialState.PluginVersionOf(ws.OutputPluginPath), out var built) && installed > built)
+        var built = VersionOf(ws.OutputPluginPath);
+        if (VersionOf(plugin.PluginPath) is { } installed && built != null && installed > built)
             throw new ToolException($"ACT 에 더 새 플러그인({installed})이 설치되어 있어, 옛 공식 플러그인({built})으로 만든 패치본으로 덮어쓰지 않습니다. " +
                                     "다시 확인(prepare)해 최신 공식 플러그인으로 다시 만드세요.");
+        plugin = WithoutNewer(plugin, built);
         string? overlay = null;
         if (File.Exists(ws.OverlayOpcodesPath) && overlayResources != "-")
         {
@@ -219,6 +283,19 @@ internal static class Install
             if (overlay == null) Log.Note(@"[install] ACT 에 OverlayPlugin 이 없어 extras\OverlayPlugin\opcodes.jsonc 는 건너뜀");
         }
         return new InstallPlan(plugin, overlay);
+    }
+
+    public static InstallPlan Plan(Workspace ws, string pluginDir, string? overlayResources = null, bool official = false) =>
+        Plan(ws, [pluginDir], overlayResources, official);
+
+    private static Version? VersionOf(string plugin) => Version.TryParse(MaterialState.PluginVersionOf(plugin), out var v) ? v : null;
+
+    // 함께 설치할 다른 언어 폴더에 더 새 플러그인이 있으면 그 폴더는 뺀다 (해루봇에서 그 언어만 먼저 업데이트한 경우)
+    private static ActTarget WithoutNewer(ActTarget target, Version? than)
+    {
+        var newer = than == null ? [] : target.Others.Where(d => VersionOf(Path.Combine(d, PluginRelease.PluginFile)) is { } v && v > than).ToList();
+        foreach (string d in newer) Log.Note($"[install] {d} 에는 더 새 플러그인이 있어 건너뜀");
+        return newer.Count == 0 ? target : target with { Others = target.Others.Except(newer).ToList() };
     }
 
     // ACT 와 게임이 꺼져 있어야 한다 (파일이 잠겨 있고, deucalion 이 게임에 들어가 있음)
@@ -246,16 +323,16 @@ internal static class Install
         string sourceDir = plan.Official ? Path.GetDirectoryName(ws.PluginPath)! : output;
         EnsureClosed();
 
-        var changes = new List<Change>();
         var dlls = Directory.GetFiles(sourceDir, "*.dll").Select(f => (Source: f, Name: Path.GetFileName(f))).ToList();
         // 옛 deucalion 은 이름이 버전마다 다르다 — 들어 있는 것 전부 (distrib 와 이미 이름이 바뀐 .dll).
         // 새 deucalion 을 넣을 때만 치운다: 넣을 것에 deucalion 이 없으면(백신 격리 등) ACT 가 패킷을 못 받게 되므로 멈춘다.
-        var oldDeucalion = Directory.GetFiles(plan.Plugin.PluginDir, "deucalion*.dll").Select(Path.GetFileName).Select(n => n!)
-            .Where(n => !dlls.Any(d => d.Name.Equals(n, StringComparison.OrdinalIgnoreCase))).ToList();
         if (!dlls.Any(d => d.Name.StartsWith("deucalion", StringComparison.OrdinalIgnoreCase)))
             throw new ToolException($"설치할 파일에 deucalion 이 없습니다 ({sourceDir}). 백신이 격리했을 수 있습니다. " +
                                     "Windows 보안 > 바이러스 및 위협 방지 > 보호 기록에서 복원하거나 작업 폴더를 제외 목록에 넣은 뒤 다시 확인(prepare)하세요 (공식 플러그인을 다시 받습니다).");
-        changes.Add(new Change(plan.Plugin.PluginDir, dlls, oldDeucalion));
+        var changes = plan.Plugin.PluginDirs.Select(dir => new Change(dir, dlls,
+            Directory.GetFiles(dir, "deucalion*.dll").Select(Path.GetFileName).Select(n => n!)
+                .Where(n => !dlls.Any(d => d.Name.Equals(n, StringComparison.OrdinalIgnoreCase))).ToList())).ToList();
+        var plugins = changes.ToList(); // FFXIV 플러그인 폴더들 (OverlayPlugin 말고)
         if (plan.OverlayResources != null)
             changes.Add(new Change(plan.OverlayResources, [(ws.OverlayOpcodesPath, OverlayOpcodes)], []));
 
@@ -269,13 +346,17 @@ internal static class Install
             Log.Done("[install] 같은 파일이 이미 설치되어 있어 바꾸지 않음");
             return new InstallResult(plan, "", []);
         }
-        // 플러그인은 이미 이 패치본이고 다른 대상(해루봇이 시작할 때마다 덮어쓰는 opcodes.jsonc 등)만 다를 때: 이 패치본을 설치한
-        // 백업에 그 대상을 보태고 다시 넣는다 (새 백업을 만들면 패치본이 "원래 파일"로 들어가 되돌리기가 망가진다)
-        if (!pending.Contains(changes[0]) && LatestBackup(ws) is { } last && BackupManifest.Load(last) is { } lm &&
-            lm.Targets.Any(t => SamePath(t.Dir, changes[0].Dir) &&
-                                changes[0].Put.All(p => t.Hashes?.GetValueOrDefault(p.Name) == sourceHash[p.Source])))
+        // 플러그인은 (어느 폴더엔가) 이미 이 패치본이고 다른 대상(해루봇이 시작할 때마다 덮어쓰는 opcodes.jsonc, 그 뒤에 생긴 다른
+        // 언어 폴더 등)만 다를 때: 이 패치본을 설치한 백업에 그 대상을 보태고 다시 넣는다 (새 백업을 만들면 되돌리기 한 번으로 다
+        // 돌아가지 않고, 패치본을 "원래 파일"로 담으면 되돌리기가 망가진다)
+        var done = plugins.Where(c => !pending.Contains(c)).ToList();
+        if (done.Count > 0 && LatestBackup(ws) is { } last && BackupManifest.Load(last) is { } lm &&
+            done.All(c => lm.Targets.Any(t => SamePath(t.Dir, c.Dir) &&
+                                              c.Put.All(p => t.Hashes?.GetValueOrDefault(p.Name) == sourceHash[p.Source]))))
             return Reinstall(plan, pending, last, lm, sourceHash);
 
+        // 이미 같은 파일이 든 대상은 백업하지도 바꾸지도 않는다
+        changes = pending;
         foreach (var c in changes)
         {
             RejectReparsePoint(c.Dir);
@@ -388,6 +469,13 @@ internal static class Install
         if (m.Targets.Count == 0) throw new ToolException($"백업 기록의 폴더가 모두 없어져 되돌릴 곳이 없습니다: {dir}");
         // 되돌릴 수 없는 상태면 관리자 권한을 청하기 전에 알린다 (확인 창을 띄운 뒤 거절하지 않게)
         if (CannotRestoreReason(m, dir) is { } reason) throw new ToolException(reason);
+        // 플러그인이 그 뒤로 바뀐 언어 폴더(해루봇에서 그 언어만 업데이트)는 그대로 두고 나머지만
+        if (!m.FailedInstall)
+        {
+            foreach (var t in m.Targets.Where(t => PluginReplaced(dir, t)))
+                Log.Note($"[restore] {t.Dir} 의 플러그인은 설치한 뒤로 바뀌어 그대로 둠");
+            m = m with { Targets = m.Targets.Where(t => !PluginReplaced(dir, t)).ToList() };
+        }
         EnsureClosed();
         foreach (var t in m.Targets) Elevation.EnsureWritable(t.Dir);
         var restored = new List<string>();
@@ -402,18 +490,23 @@ internal static class Install
     // 이 백업으로 되돌리면 안 되는 이유 (되돌릴 수 있으면 null). 설치한 뒤로 ACT 의 플러그인이 다른 것으로 바뀌었으면(해루봇의
     // 플러그인 업데이트 등) 되돌리면 옛 버전으로 내려간다. 설치가 도중에 실패한 백업은 확인 없이 되돌린다.
     // 이미 원래 파일로 돌아가 있는 것(되돌리기가 도중에 실패했거나, 설치가 파일을 바꾸기 전에 멈춤)은 바뀐 것으로 보지 않는다.
+    // 플러그인 폴더가 여럿(해루봇의 언어별 폴더)이면 모두 바뀌었을 때만 — 일부만 바뀌었으면 나머지는 되돌린다.
     public static string? CannotRestoreReason(BackupManifest m, string backupDir)
     {
         if (m.FailedInstall) return null;
-        foreach (var t in m.Targets)
-        {
-            if (t.Hashes?.GetValueOrDefault(PluginRelease.PluginFile) is not { } hash) continue;
-            string f = Path.Combine(t.Dir, PluginRelease.PluginFile);
-            if (File.Exists(f) && Sha256Of(f) != hash && !SameAsBackup(backupDir, t, PluginRelease.PluginFile))
-                return "설치한 뒤로 ACT 의 플러그인이 다른 것으로 바뀌어(해루봇의 플러그인 업데이트 등) 되돌리지 않습니다. " +
-                       $"되돌리면 지금보다 옛 플러그인으로 내려갑니다. ({f})";
-        }
+        var plugins = m.Targets.Where(t => t.Hashes?.ContainsKey(PluginRelease.PluginFile) == true && Directory.Exists(t.Dir)).ToList();
+        if (plugins.Count > 0 && plugins.All(t => PluginReplaced(backupDir, t)))
+            return "설치한 뒤로 ACT 의 플러그인이 다른 것으로 바뀌어(해루봇의 플러그인 업데이트 등) 되돌리지 않습니다. " +
+                   $"되돌리면 지금보다 옛 플러그인으로 내려갑니다. ({Path.Combine(plugins[0].Dir, PluginRelease.PluginFile)})";
         return null;
+    }
+
+    // 이 대상의 FFXIV 플러그인이 설치한 뒤로 다른 것으로 바뀌었는지 (우리가 넣은 것도, 원래 파일도 아님)
+    private static bool PluginReplaced(string backupDir, BackupManifest.Target t)
+    {
+        if (t.Hashes?.GetValueOrDefault(PluginRelease.PluginFile) is not { } hash) return false;
+        string f = Path.Combine(t.Dir, PluginRelease.PluginFile);
+        return File.Exists(f) && Sha256Of(f) != hash && !SameAsBackup(backupDir, t, PluginRelease.PluginFile);
     }
 
     // 지금 되돌릴 수 있는 백업 (가장 최근 것이 되돌릴 수 없으면 없음 — 화면의 되돌리기 버튼을 숨긴다)

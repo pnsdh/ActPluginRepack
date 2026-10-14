@@ -40,7 +40,9 @@ internal sealed record StatusReport(
         {
             lines.Add(new("ACT", act.PluginPath));
             lines.Add(new("", $"설치된 버전 {act.InstalledVersion ?? "?"}" +
-                              (InstalledIsOurs == true ? " (이 프로그램의 패치본)" : InstalledIsOurs == false ? " (패치본 아님)" : "")));
+                              (InstalledIsOurs == true ? " (이 프로그램의 패치본)" : InstalledIsOurs == false ? (act.Others.Count > 0 ? " (패치본이 아닌 폴더가 있음)" : " (패치본 아님)") : "")));
+            foreach (string other in act.Others)
+                lines.Add(new("", $"함께 설치: {other} ({MaterialState.PluginVersionOf(Path.Combine(other, PluginRelease.PluginFile)) ?? "?"})"));
         }
         else lines.Add(new("ACT", ActError ?? "(찾지 못함)"));
         if (RestorableBackup != null) lines.Add(new("되돌릴 백업", RestorableBackup, LogKind.Note));
@@ -86,17 +88,21 @@ internal static class Status
             if (ex is ActTargetException t) (actProblem, actPaths) = (t.Problem, t.Paths);
         }
 
+        // 해루봇의 언어별 폴더가 여럿이면 모두 (설치도 모두에 한다 — 더 새 플러그인이 든 다른 언어 폴더는 설치할 때 빼므로 여기서도)
+        var actPlugins = act?.PluginPaths.Where(File.Exists).ToList() ?? [];
+        static bool Same(string a, string b) => File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
+        static bool Newer(string f, string than) => Version.TryParse(MaterialState.PluginVersionOf(f), out var installed) &&
+                                                    Version.TryParse(MaterialState.PluginVersionOf(than), out var v) && installed > v;
         bool? ours = null;
         string ourDll = ws.OutputPluginPath;
-        if (act != null && File.Exists(act.PluginPath) && File.Exists(ourDll))
-            ours = File.ReadAllBytes(act.PluginPath).AsSpan().SequenceEqual(File.ReadAllBytes(ourDll));
+        if (actPlugins.Count > 0 && File.Exists(ourDll))
+            ours = actPlugins.Where(f => f == act!.PluginPath || !Newer(f, ourDll)).All(f => Same(f, ourDll));
 
         // 공식 최신본(input\plugin)과 ACT 의 플러그인이 다르고, ACT 쪽이 더 새 버전이 아니면 공식 최신본으로 바꿀 수 있다
         // (버전 번호를 바꾸지 않는 패치본은 버전이 같아도 내용이 다르다)
         bool officialUpdate = prepared?.PatchNeeded == false && stale.Count == 0 && act != null &&
-                              File.Exists(act.PluginPath) && File.Exists(ws.PluginPath) &&
-                              !File.ReadAllBytes(act.PluginPath).AsSpan().SequenceEqual(File.ReadAllBytes(ws.PluginPath)) &&
-                              !(Version.TryParse(act.InstalledVersion, out var installed) && Version.TryParse(basePlugin, out var latest) && installed > latest);
+                              File.Exists(act.PluginPath) && File.Exists(ws.PluginPath) && !Newer(act.PluginPath, ws.PluginPath) &&
+                              actPlugins.Any(f => !Same(f, ws.PluginPath) && !Newer(f, ws.PluginPath));
 
         var advice = new List<string>();
         if (configError != null || clients.Count == 0) advice.Add($"{Config.FileName} 의 게임 클라이언트 경로를 확인하세요.");

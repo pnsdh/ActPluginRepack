@@ -93,7 +93,9 @@ dotnet $cli hotfix                                   # 패치본 배포 묶음 (
 `oxidizer`·`sharpvision`·`datamining`·`xivdata`, opcode: `yarukon`·`opcodediff`·`localdiff`·`ida`·`karashiiro`, 시그니처 복구:
 `upstream`·`sigregen`; 한 분류의 이름이 없으면 그 분류는 전부 사용).
 
-**install 옵션**: `--target <플러그인 폴더>` / `--overlay <OverlayPlugin resources 폴더 | ->` (직접 지정하거나 건너뜀) /
+**install 옵션**: `--target <플러그인 폴더>` (여러 번 줄 수 있음 — 준 폴더에만. 생략하면 ACT 설정에서 찾고, 해루봇이면
+한국·글로벌 서버용 폴더 모두 — [ACT 에 설치](HowItWorks.md#act-에-설치--되돌리기)) /
+`--overlay <OverlayPlugin resources 폴더 | ->` (직접 지정하거나 건너뜀) /
 `--official`. **rsv 옵션**: `--days <일>` / `--logs <파일|폴더,...>`.
 
 작업 폴더에 쓰는 명령(prepare / build / install / restore / hotfix / rsv / repack / csv / export / `fetch-exe --version` /

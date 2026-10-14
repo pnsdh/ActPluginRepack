@@ -86,7 +86,7 @@ internal static class Navigator
         else Show(new HomeViewModel());
     }
 
-    // 시작 화면에 한 번 보일 알림 (간편 모드: 위쪽 알림 칸 — [새로 고침]하면 사라짐, 고급 모드: 현재 상태 맨 위)
+    // 시작 화면에 한 번 보일 알림 (간편 모드: 위쪽 알림 칸 — 다른 화면으로 가거나 [새로 고침]하면 사라짐, 고급 모드: 현재 상태 맨 위)
     public static void Notify(string message)
     {
         switch (Main.CurrentPage)

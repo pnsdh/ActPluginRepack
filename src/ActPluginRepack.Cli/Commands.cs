@@ -187,7 +187,7 @@ internal static class Commands
         var ws = o.Workspace();
         return Elevated.RunLogged(o.Get(Elevated.LogOption), () =>
         {
-            var plan = global::Install.Plan(ws, o.Get("--target"), o.Get("--overlay"), official: o.Flag("--official"));
+            var plan = global::Install.Plan(ws, o.GetAll("--target") is { Count: > 0 } targets ? targets : null, o.Get("--overlay"), official: o.Flag("--official"));
             try
             {
                 using var _ = ws.Lock();
