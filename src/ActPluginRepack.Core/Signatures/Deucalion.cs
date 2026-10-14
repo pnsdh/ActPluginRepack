@@ -1,0 +1,203 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
+
+// deucalion(패킷 후킹 dll, Rust) 의 시그니처를 읽고 고친다.
+//
+// 시그니처는 Rust 상수 문자열이라 dll 안에 두 벌 있다:
+//   .rdata  실제로 쓰이는 사본. 문자열끼리 구분자 없이 이어 붙어 있다.
+//   .rustc  메타데이터 사본. "..." 로 감싸져 있어 경계가 분명하다 -> 목록은 여기서 뽑는다.
+// 패치는 두 사본 모두 같은 길이로 덮어쓴다(길이가 바뀌면 이어 붙은 옆 문자열이 깨짐).
+// pelite 패턴은 공백을 무시하므로 짧으면 공백으로 채우고, 길면 공백을 빼서 맞춘다.
+internal static class Deucalion
+{
+    public sealed record Sig(string Name, string Pattern);
+
+    // deucalion 의 HookType 순서. .rdata 에 이 순서로 이어 붙어 있다.
+    private static readonly string[] HookNames = ["Recv", "Send", "SendLobby"];
+
+    private static readonly Regex QuotedPattern = new("\"([0-9A-Fa-f?$'{}()|\\[\\]\\- ]+)\"", RegexOptions.CultureInvariant);
+    private static readonly Regex HexByte = new("[0-9A-Fa-f]{2}", RegexOptions.CultureInvariant);
+    private static readonly Regex CreateTargetLabel = new(@"^ *Internal (\w+) sig error", RegexOptions.CultureInvariant);
+
+    // input\plugin 의 deucalion 배포본. 플러그인이 시작할 때 *.distrib.dll -> *.dll 로 바꿔 쓴다.
+    public static string? FindDistrib(string pluginDir)
+    {
+        if (!Directory.Exists(pluginDir)) return null;
+        var found = Directory.GetFiles(pluginDir, "deucalion*.distrib.dll");
+        return found.Length switch
+        {
+            0 => null,
+            1 => found[0],
+            _ => throw new ToolException($"{pluginDir} 에 deucalion distrib dll 이 여러 개 있습니다. 하나만 두세요: " +
+                                         string.Join(", ", found.Select(Path.GetFileName))),
+        };
+    }
+
+    public static List<Sig> ReadSignatures(byte[] dll)
+    {
+        var pe = PeImage.Parse(dll, "deucalion dll");
+        var rustc = pe.Find(".rustc")
+                    ?? throw new ToolException("deucalion dll 에 .rustc 섹션이 없어 시그니처 위치를 찾을 수 없습니다.");
+        string meta = Encoding.Latin1.GetString(pe.Span(rustc));
+        string rdata = Encoding.Latin1.GetString(pe.Span(pe.Require(".rdata")));
+
+        var patterns = QuotedPattern.Matches(meta)
+            .Select(m => m.Groups[1].Value.Trim())
+            .Where(p => HexByte.Matches(p).Count >= 4 && SigPattern.TryParse(p, out _))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        // 공식 릴리스 빌드는 .rustc 메타데이터가 압축돼 있다 -> .rdata 의 이어 붙은 문자열을 잘라서 쓴다
+        if (patterns.Count == 0) patterns = SplitRdata(rdata);
+
+        // .rdata 의 실제 사본 위치로 이름을 붙인다:
+        //   뒤에 "Internal <X> sig error" 가 오면 CreateTarget.<X> (normal/alt/fallback 후보)
+        //   나머지는 이어 붙은 순서대로 Recv / Send / SendLobby
+        var result = new List<Sig>();
+        var hooks = new List<(int Offset, string Pattern)>();
+        foreach (string p in patterns)
+        {
+            int at = rdata.IndexOf(p, StringComparison.Ordinal);
+            if (at < 0) continue; // 런타임에 안 쓰이는 메타데이터 전용 문자열
+            var label = CreateTargetLabel.Match(rdata, at + p.Length, Math.Min(64, rdata.Length - at - p.Length));
+            if (label.Success) result.Add(new Sig($"CreateTarget.{label.Groups[1].Value}", p));
+            else hooks.Add((at, p));
+        }
+        hooks.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+        // 순서는 링커 배치일 뿐이라 내용으로도 확인한다: Recv 만 call 을 따라가는 형태, Send/SendLobby 는 함수 시작
+        bool known = hooks.Count == HookNames.Length && hooks[0].Pattern.Contains('$') &&
+                     hooks.Skip(1).All(h => !h.Pattern.Contains('$'));
+        result.InsertRange(0, hooks.Select((h, i) => new Sig(known ? HookNames[i] : $"Hook{i + 1}", h.Pattern)));
+        if (result.Count == 0) throw new ToolException("deucalion dll 에서 시그니처를 찾지 못했습니다.");
+        return result;
+    }
+
+    // .rdata 에서 시그니처처럼 생긴 문자열 구간을 찾아, 구분자 없이 이어 붙은 곳을 자른다.
+    // 시그니처 토큰은 공백으로 나뉘므로, 한 덩어리 안에서 "1C40"(16진수 두 쌍)이나 "}40"/")40"/"?40"(닫는 기호나
+    // 와일드카드 뒤 16진수)처럼 붙은 곳이 다음 문자열의 시작이다.
+    private static readonly Regex PatternRun = new(@"[0-9A-F?$'{}()| ]{12,}", RegexOptions.CultureInvariant);
+
+    private static List<string> SplitRdata(string rdata)
+    {
+        var result = new List<string>();
+        foreach (Match run in PatternRun.Matches(rdata))
+        {
+            var current = new List<string>();
+            foreach (string token in run.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                string rest = token;
+                var cut = Regex.Match(rest, @"^(.*?(?:[0-9A-F]{2}|[})?]))([0-9A-F]{2}.*)$");
+                while (cut.Success && !Regex.IsMatch(rest, @"^[0-9A-F]{2}$"))
+                {
+                    current.Add(cut.Groups[1].Value);
+                    Flush();
+                    rest = cut.Groups[2].Value;
+                    cut = Regex.Match(rest, @"^(.*?(?:[0-9A-F]{2}|[})?]))([0-9A-F]{2}.*)$");
+                }
+                current.Add(rest);
+            }
+            Flush();
+
+            void Flush()
+            {
+                string p = string.Join(" ", current).Trim();
+                current.Clear();
+                if (HexByte.Matches(p).Count >= 4 && SigPattern.TryParse(p, out _)) result.Add(p);
+            }
+        }
+        return result.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    // 여러 시그니처를 한 번에 바꾼다. 위치는 원본에서 한 번만 읽는다 — 패치한 dll 을 다시 읽으면(특히 .rustc 가
+    // 압축돼 .rdata 를 잘라 읽는 릴리스 빌드에서) 공백을 줄이거나 채운 문자열의 경계가 달라질 수 있다.
+    // 바뀐 게 없으면 Dll 은 null. Changed 는 실제로 바뀐 이름들.
+    public static (byte[]? Dll, List<string> Changed) PatchAll(byte[] dll, IEnumerable<Sig> replacements)
+    {
+        var sigs = ReadSignatures(dll);
+        byte[] patched = (byte[])dll.Clone();
+        var pe = PeImage.Parse(patched, "deucalion dll");
+        var changed = new List<string>();
+        foreach (var r in replacements)
+        {
+            var sig = sigs.FirstOrDefault(s => s.Name.Equals(r.Name, StringComparison.OrdinalIgnoreCase))
+                      ?? throw new ToolException($"deucalion 에 '{r.Name}' 시그니처가 없습니다 " +
+                                                 $"(쓸 수 있는 것: {string.Join(", ", sigs.Select(s => s.Name))}).");
+            string old = sig.Pattern;
+            // 띄어쓰기만 다른 건 같은 시그니처 (체크섬을 괜히 바꾸지 않게)
+            if (r.Pattern.Replace(" ", "") == old.Replace(" ", "")) continue;
+            string replacement = FitLength(r.Pattern.Trim(), old.Length, r.Name);
+            if (ReplaceAll(patched, pe.Require(".rdata"), old, replacement) == 0)
+                throw new ToolException($".rdata 에서 '{r.Name}' 시그니처를 찾지 못했습니다.");
+            ReplaceAll(patched, pe.Require(".rustc"), $"\"{old}\"", $"\"{replacement}\"");
+            changed.Add(sig.Name);
+        }
+        return (changed.Count > 0 ? patched : null, changed);
+    }
+
+    private static string FitLength(string pattern, int length, string name)
+    {
+        SigPattern.Parse(pattern); // 문법 오류는 여기서
+        if (pattern.Length > length) pattern = pattern.Replace(" ", "");
+        if (pattern.Length > length)
+            throw new ToolException($"'{name}' 시그니처는 공백을 빼도 너무 깁니다 " +
+                                    $"({pattern.Length} > {length}자, dll 안의 문자열은 늘릴 수 없음).");
+        return pattern.PadRight(length);
+    }
+
+    private static int ReplaceAll(byte[] bytes, PeImage.Section section, string from, string to)
+    {
+        byte[] f = Encoding.Latin1.GetBytes(from), t = Encoding.Latin1.GetBytes(to);
+        var span = bytes.AsSpan(section.RawOffset, Math.Min(section.RawSize, bytes.Length - section.RawOffset));
+        int count = 0;
+        for (int i = span.IndexOf(f); i >= 0; )
+        {
+            t.CopyTo(span[i..]);
+            count++;
+            int next = span[(i + f.Length)..].IndexOf(f);
+            i = next < 0 ? -1 : i + f.Length + next;
+        }
+        return count;
+    }
+
+    public static byte[] Sha256(byte[] data) => SHA256.HashData(data);
+}
+
+// Machina.FFXIV.dll 안의 deucalion 관련 상수 (IL 의 ldstr).
+//   DeucalionInjector._checksum      deucalion dll 의 SHA256 ("32-6b-..." 형식). 다르면 주입 거부.
+//   DeucalionClient 의 시그니처 문자열  런타임 RECV 시그니처(플러그인 3.0.3.3+). deucalion 이
+//                                    hello 에 "RECV OFF" 를 보내면 이 문자열로 다시 후킹시킨다.
+internal static class DeucalionMachina
+{
+    private const string InjectorType = "Machina.FFXIV.Deucalion.DeucalionInjector";
+    private const string ClientType = "Machina.FFXIV.Deucalion.DeucalionClient";
+
+    public static string FormatChecksum(byte[] hash) => BitConverter.ToString(hash).ToLowerInvariant();
+
+    public static string? ReadChecksum(ModuleDefinition machina) => ChecksumLoad(machina)?.Operand as string;
+
+    public static void SetChecksum(ModuleDefinition machina, byte[] hash)
+    {
+        var ins = ChecksumLoad(machina)
+                  ?? throw new ToolException($"Machina 에 {InjectorType}._checksum 이 없습니다.");
+        ins.Operand = FormatChecksum(hash);
+    }
+
+    private static Instruction? ChecksumLoad(ModuleDefinition machina)
+    {
+        var getter = machina.GetType(InjectorType)?.Properties.FirstOrDefault(p => p.Name == "_checksum")?.GetMethod;
+        return getter?.Body.Instructions.FirstOrDefault(i => i.OpCode == OpCodes.Ldstr);
+    }
+
+    // DeucalionClient 안에서 시그니처처럼 생긴 ldstr 들. 없으면 런타임 교체 기능이 없는 버전.
+    public static List<Instruction> RuntimeSignatures(ModuleDefinition machina) =>
+        machina.GetType(ClientType)?.Methods
+            .Where(m => m.HasBody)
+            .SelectMany(m => m.Body.Instructions)
+            .Where(i => i.OpCode == OpCodes.Ldstr && i.Operand is string s && LooksLikeSignature(s))
+            .ToList() ?? [];
+
+    private static bool LooksLikeSignature(string s) =>
+        Regex.Matches(s, "[0-9A-Fa-f]{2}").Count >= 4 && SigPattern.TryParse(s, out _);
+}

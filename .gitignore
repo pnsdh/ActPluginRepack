@@ -1,12 +1,49 @@
 # 빌드 산출물 (항상 input\ 에서 재생성 가능)
 /output/
+/output.tmp/
 /data/
+/data.tmp/
 
 # input\ 은 폴더 구조만 추적한다 — 실제 재료(플러그인 DLL / opcode / override / CSV)는
-# 직접 구해서 배치 (README.md 준비물 참고)
+# 직접 구하거나 prepare 가 채운다 (docs\ManualInputs.md 참고). .state.json 은 마지막 prepare 기록.
 /input/*/*
 !/input/*/.gitkeep
+/input/.state.json
 
 # .NET 빌드
-tool/bin/
-tool/obj/
+bin/
+obj/
+
+# 사용자별 설정 (config.example.json 참고)
+/config.json
+
+# prepare 가 보관하는 게임 exe (버전별, 다음 패치 때 비교용)
+/snapshots/
+
+# prepare 가 만드는 부가 opcode 파일 (Lemegeton / OverlayPlugin)
+/extras/
+
+# prepare 가 받아 쓰는 외부 도구와 캐시
+/tools/
+
+# install 이 남기는 ACT 원래 파일 백업
+/backups/
+
+# 동시 실행 잠금
+/.actrepack.lock
+
+# publish.ps1 이 만드는 배포 폴더 / zip
+/dist/
+
+# hotfix 명령이 만드는 패치본 배포 묶음
+/hotfix/
+
+# 화면에서 새로 만들 때 옮겨 둔 깨진 config.json
+/config.json.broken-*
+
+# IDE / 도구가 남기는 것 (WPF 빌드가 끊기면 남는 임시 프로젝트 포함)
+.vs/
+*.user
+TestResults/
+*_wpftmp.csproj
+/.claude/

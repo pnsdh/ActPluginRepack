@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 일반 사용자용 화면 (WPF). 기능은 전부 Core 에 있고, 관리자 권한이 필요한 설치는 같이 배포되는 CLI 를 UAC 로 띄운다. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ActPluginRepack.Gui</AssemblyName>
+    <RootNamespace>ActPluginRepack.Gui</RootNamespace>
+    <Product>FFXIV 플러그인 임시 패치</Product>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.2.1" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.1" />
+  </ItemGroup>
+
+  <!-- 글꼴 (사용자 PC 에 없어도 같게 보이도록 내장, 둘 다 SIL OFL 1.1):
+       화면 Pretendard https://github.com/orioncactus/pretendard / 데이터 출력 D2Coding https://github.com/naver/d2-coding-font -->
+  <ItemGroup>
+    <Resource Include="Fonts\*.otf;Fonts\*.ttf" />
+    <Resource Include="Assets\app.ico" />
+    <None Include="Fonts\*-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ActPluginRepack.Core\ActPluginRepack.Core.csproj" />
+    <!-- 설치 단계의 관리자 권한 재실행에 쓰는 CLI 를 같은 폴더에 둔다 (개발 빌드).
+         배포(publish)는 publish.ps1 이 CLI 를 따로 단일 파일로 만들어 cli\ 에 넣으므로 참조하지 않는다. -->
+    <ProjectReference Include="..\ActPluginRepack.Cli\ActPluginRepack.Cli.csproj" Condition="'$(_IsPublishing)' != 'true'" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,18 @@
+{
+  "//": "Yarukon signatures.json 위에 덮어쓰는 보정 (CN 이 아닌 클라이언트에만 적용). 7.57 글로벌/한국 exe 에서 확인. ActorMove: Yarukon 시그니처(흔한 함수 시작)가 한국 exe 에선 엉뚱한 함수에 먼저 걸림 -> 더 길게, RIP 주소는 와일드카드.",
+  "ServerZoneIpcType": {
+    "__init__": {
+      "EffectResult": {
+        "//": "CN 시그니처와 같은 위치, 레지스터만 다름: CN mov ecx,esi (8B CE) -> Global/KR mov ecx,r14d (41 8B CE)",
+        "Signature": "E8 ? ? ? ? 45 33 C0 48 8D 57 ? 41 8B CE E8 ? ? ? ? E9 ? ? ? ? 44 0F B7 47",
+        "Type": "Call"
+      },
+      "EffectResultBasic": {
+        "//": "위와 같음",
+        "Signature": "E8 ? ? ? ? 45 33 C0 48 8D 57 ? 41 8B CE E8 ? ? ? ? E9 ? ? ? ? 48 8D 57 ? 41 8B CE E8 ? ? ? ? E9 ? ? ? ? 48 8D 57 ? 41 8B CE E8 ? ? ? ? E9 ? ? ? ? 4C 8D 47",
+        "Type": "Call"
+      }
+    },
+    "ActorMove": "48 89 5C 24 ? 57 48 83 EC 20 4C 63 05 ? ? ? ? 48 8B DA 33 D2 8B F9 41 8D 40 01 F7 35"
+  }
+}

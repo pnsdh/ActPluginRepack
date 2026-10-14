@@ -1,116 +1,105 @@
-# ActPluginRepack — 패치 직후 임시 플러그인 만들기
+# ActPluginRepack
 
-플러그인 작성자가 새 버전을 내기 전에, **opcode / 스킬명 오버라이드 / 게임 데이터 테이블**을
-갈아끼운 `FFXIV_ACT_Plugin.dll` 을 직접 만드는 도구. 소스 재빌드 없이 DLL 안의 리소스만 교체한다.
+[![최신 릴리즈](https://img.shields.io/github/v/release/pnsdh/ActPluginRepack?color=brightgreen&sort=semver)](https://github.com/pnsdh/ActPluginRepack/releases/latest)
 
-대상 데이터는 플러그인 DLL 안에 **두 겹으로**(Costura.Fody) 박혀 있고, 바깥 DEFLATE 해제 →
-안쪽 리소스 교체 → 재압축을 이 도구가 자동으로 한다:
+게임이 업데이트됐는데 ACT 의 [FFXIV 플러그인](https://github.com/ravahn/FFXIV_ACT_Plugin) 업데이트가 아직 나오지 않았을 때,
+**지금 플러그인을 임시로 고쳐서 바로 쓸 수 있게** 해 주는 프로그램입니다. 공식 업데이트가 나오면 평소처럼 해루봇(또는 ACT)에서
+업데이트하면 됩니다.
 
-```
-FFXIV_ACT_Plugin.dll
-  ├─ (DEFLATE) costura.machina.ffxiv.dll.compressed
-  │     └─ Machina.FFXIV.dll
-  │           └─ Machina.FFXIV.Headers.Opcodes.<Region>.txt               ← opcode
-  └─ (DEFLATE) costura.ffxiv_act_plugin.resource.dll.compressed
-        └─ FFXIV_ACT_Plugin.Resource.dll
-              ├─ ...Generated.Override.global_*.txt                        ← 스킬명 오버라이드
-              └─ ...Generated.<List>_<Lang>.txt                            ← 게임 데이터
-```
+* 버튼 하나로 고칠 필요가 있는지 확인하고, 필요하면 고친 플러그인을 만들어 ACT 에 설치까지 합니다. 해루봇을 지원합니다.
+* 언제든 설치 전으로 되돌릴 수 있습니다.
+* 공식 업데이트가 이미 나왔다면 고친 플러그인 대신 공식 최신본을 설치합니다.
 
-## 빠른 시작
+고치는 것은 플러그인 안의 opcode, 스킬 이름, 게임 데이터, 패킷 후킹 시그니처입니다. 필요한 값은 공개 저장소에서 받거나 설치된
+게임 클라이언트에서 직접 뽑습니다. 어떻게 동작하는지는 [동작 원리](docs/HowItWorks.md)에 있습니다.
 
-1. .NET SDK (net10.0) 를 설치한다.
-2. 원본 `FFXIV_ACT_Plugin.dll` ([ravahn 공식 릴리스](https://github.com/ravahn/FFXIV_ACT_Plugin))을
-   `input\plugin\` 에 넣는다. 배포판에 동봉된 나머지 `*.dll` 도 같이 넣으면 output 에 복사된다.
-3. 아래 [재료 준비](#재료-준비)에서 **바꿀 것만** 준비해 넣는다.
-   넣은 것만 교체되고, 안 넣은 리소스는 베이스 DLL 원본값 그대로 동작한다.
-4. 실행한다:
-   ```powershell
-   .\build.ps1
-   ```
-5. `output\` 폴더를 ACT 플러그인 폴더에 통째로 복사한다(원본 백업 권장).
+## 설치
 
-옵션: `-NoCsv` (CSV 재변환 생략) / `-Plugin <경로>` (원본 플러그인 지정)
+Windows 10 / 11 (64비트)와 **.NET 10 데스크톱 런타임**이 필요합니다. 런타임이 없으면 프로그램을 처음 켤 때 Windows 가 설치
+안내를 띄웁니다. 직접 받으려면 [.NET 10 다운로드](https://dotnet.microsoft.com/download/dotnet/10.0)에서 ".NET 데스크톱 런타임"의
+Windows x64 설치 파일을 받습니다.
 
-## 재료 준비
+1. [최신 릴리즈](https://github.com/pnsdh/ActPluginRepack/releases/latest)에서 `ActPluginRepack-버전-win-x64.zip` 을 내려받습니다.
+1. 마우스 오른쪽 클릭 → **압축 풀기**로 바탕화면이나 문서 폴더 등에 풉니다. zip 안에서 바로 실행하지 않습니다.
+1. 압축을 푼 폴더의 `ActPluginRepack.Gui.exe` 를 실행합니다. `cli`, `ida` 폴더는 프로그램이 쓰는 것이니 지우거나 옮기지 않습니다.
+1. "Windows의 PC 보호" 창이 뜨면 **추가 정보** → **실행**을 누릅니다. 개인이 만든 프로그램이라 유료 코드 서명이 없어서 뜹니다.
+1. 처음 실행하면 설치된 게임 클라이언트(한국 / 글로벌)와 ACT 의 FFXIV 플러그인을 찾아 보여 줍니다. 맞으면 저장합니다.
 
-세 재료 모두 선택사항이다 — 바꿀 것만 넣으면 되고, 최소 하나만 있으면 빌드된다.
+## 사용하기
 
-### opcode — `input\opcodes\`
+1. ACT(해루봇)와 게임을 끕니다.
+1. **확인하고 고치기**를 누릅니다.
+   * Windows 의 "사용자 계정 컨트롤" 창이 뜨면 **예**를 누릅니다. ACT 가 Program Files 에 있어 관리자 권한이 필요할 때,
+     설치와 되돌리기 때만 뜹니다.
+1. 설치했다는 결과가 나오면 ACT 를 실행합니다.
 
-- 파일: `Global.txt` / `Korean.txt` / `Chinese.txt` / `TraditionalChinese.txt` — region 4개 고정, 그 외 이름은 무시.
-- 형식: 각 줄 `이름|16진수`. `export` 커맨드로 현재 내장값을 추출해 시작점으로 쓸 수 있다.
+원래대로 돌리려면 첫 화면의 **설치 전으로 되돌리기**를 누릅니다. 이 버튼은 되돌릴 수 있을 때만 보입니다.
 
-구하는 곳:
+새 버전이 나오면 창 위쪽에 알림이 뜹니다. **지금 업데이트**를 누르면 받아서 바꾸고 다시 실행합니다. 받은 파일은 배포자 서명을
+확인한 뒤에만 씁니다.
 
-- [ACT_FFXIV 디스코드](https://discord.gg/9tHJ7s2P3r)의
-  [#contribute-logfiles](https://discord.com/channels/551474815727304704/551527590800654386) 에 올라오는 제보
-- [karashiiro/FFXIVOpcodes](https://github.com/karashiiro/FFXIVOpcodes)
-- 직접 조사할 때 참고: [xivdev/opcodediff](https://github.com/xivdev/opcodediff),
-  [Yarukon/FFXIVNetworkOpcodes](https://github.com/Yarukon/FFXIVNetworkOpcodes/commits/master/)
+**고급 모드**(오른쪽 위 스위치)에서는 준비 · 빌드 · 설치 단계와 데이터 출처를 골라 실행하고, IDA 나 로컬 opcodediff 로 직접
+추출하거나 ACT 로그에서 RSV(가려진 스킬 이름)를 가져올 수 있습니다. 같은 일을 [명령줄](docs/CLI.md)로도 할 수 있습니다.
 
-### 스킬명 오버라이드 — `input\overrides\`
+## 자주 묻는 것
 
-- 파일: `global_*.txt` — 파일명이 `global_` 로 시작해야 로더가 읽는다.
-- 형식: 각 줄 `옛이름|새이름` (예: `_rsv_30478_..._|Claw to Tail`).
-- 로더가 접두사로 리소스를 **전부 열거**하므로 개수·이름 자유, 기존 수정과 **신규 추가** 모두 가능.
+**"아직 이번 업데이트 정보가 공개되지 않았습니다"라고 나와요.**
+패치에 필요한 정보(opcode)는 보통 게임 업데이트 후 몇 시간 안에 공개됩니다. 잠시 후 다시 누릅니다.
+"받지 못했습니다"라고 나오면 인터넷 연결이나 서버 문제이니 안내대로 확인한 뒤 다시 누릅니다.
 
-구하는 곳:
+**한국과 글로벌 클라이언트 중 하나만 업데이트했어요.**
+업데이트하지 않은 클라이언트는 빼고 확인하고 결과에 알려 줍니다. 그 서버에서 플레이할 때는 런처로 업데이트한 뒤 다시 누릅니다.
 
-- [OverlayPlugin](https://github.com/OverlayPlugin/OverlayPlugin) 사용 중 RSV 데이터가 있는
-  인스턴스에 입장하면 ACT 로그에 **262 라인**으로 기록된다 — 여기서 추출하는 방식이 일반적.
-- 디스코드 #contribute-logfiles 에도 올라오지만 opcode 에 비해 기여가 늦는 편이라,
-  패치 직후 임시 플러그인 용도의 출처로는 부적절하다.
+**공식 업데이트가 나왔는데 이 프로그램을 눌렀어요.**
+괜찮습니다. 공식 플러그인이 이미 지금 게임과 맞으면 고친 플러그인 대신 공식 최신본을 설치합니다. 해루봇에서 플러그인을
+업데이트해도 됩니다. 어느 쪽이든 이 프로그램이 설치한 패치본은 공식본으로 바뀝니다.
 
-### 게임 데이터 — `input\csv\<lang>\`
+**설치 전으로 되돌리기 버튼이 없어요.**
+이 프로그램으로 설치한 적이 없거나, 설치한 뒤 해루봇에서 플러그인을 업데이트한 경우입니다. 되돌리면 지금보다 옛 버전으로
+내려가기 때문에 버튼을 숨깁니다.
 
-데이터마이닝 CSV 를 언어 폴더(ko/en/ja/de/fr/cn/tc)에 넣으면
-빌드가 `data\` 의 리스트로 변환해 교체한다. `data\` 는 자동 생성 산출물이므로 손대지 않는다.
+**백신이 파일을 지웠다고 나와요.**
+ACT 플러그인은 게임 메모리를 읽는 프로그램이라 백신(Windows Defender 등)이 특히 `deucalion` 파일을 오탐하곤 합니다.
+Windows 보안 → 바이러스 및 위협 방지 → **보호 기록**에서 그 항목을 복원하거나, 압축을 푼 폴더와 작업 폴더
+`%LOCALAPPDATA%\ActPluginRepack` 를 제외 목록에 넣은 뒤 다시 누릅니다. 없어진 플러그인 파일은 프로그램이 다시 받습니다.
 
-구하는 곳:
+**오버레이(cactbot 등) 일부가 안 맞아요.**
+해루봇은 켤 때마다 OverlayPlugin 의 opcode 파일을 원래 것으로 되돌립니다. 해루봇 대신 ACT 를 직접 실행해 봅니다.
+데미지 미터 등 ACT 본체는 상관없습니다.
 
-- [xivapi/ffxiv-datamining](https://github.com/xivapi/ffxiv-datamining) 에 올라오는 CSV
-- 직접 추출할 때 참고: [skyborn-industries/xiv-data-oxidizer](https://github.com/skyborn-industries/xiv-data-oxidizer)
+**FFLogs 에 올릴 수 있나요?**
+아니요. 고친 플러그인은 원래 버전 번호를 그대로 써서 업로드되지 않습니다. 공식 업데이트 전까지 쓰는 임시용입니다.
 
-| 생성 리스트 | 필요한 CSV | 적용 언어 |
-|---|---|---|
-| ActionList / StatusList | `Action.csv` / `Status.csv` | 7개 언어 전부 |
-| TerritoryList | `TerritoryType.csv` + `PlaceName.csv` | en/ja/ko/de/fr |
-| ContentFinderList | `ContentFinderCondition.csv` | en/ja/ko/de/fr |
-| ActionCategoryList / WorldList / MapList ※ | `Action.csv` / `World.csv` / `Map.csv`+`PlaceName.csv` | **en 만** |
+**문제가 생겼어요.**
+진행 화면의 **자세한 기록** → **복사**로 내용을 복사해 함께 알려 주세요. 예상하지 못한 오류는 `%TEMP%\ActPluginRepack-error.log`
+에도 남습니다.
 
-- ※ 고정 3종은 플러그인이 지역 무관하게 `_English` 만 읽는다 — `input\csv\en` 이 있을 때만
-  생성·교체하고, 없으면 베이스 DLL 영어값을 유지한다.
-- cn/tc 폴더는 ActionList/StatusList 만 유효하다(DLL 에 나머지 cn/tc 리소스가 없음).
-- 데이터 리스트는 기존 리소스명만 교체된다(신규 추가는 오버라이드만 가능).
-- id 진법(16진수/10진수)은 리스트마다 다르지만 변환기가 자동 처리한다.
-- CSV 변환이 실패하면 빌드는 즉시 중단된다(누락분이 조용히 남는 것 방지).
+**프로그램을 지우려면?**
+압축을 푼 폴더를 지웁니다. 받은 플러그인과 캐시는 `%LOCALAPPDATA%\ActPluginRepack` 에 있으니 함께 지우면 깨끗해집니다.
+설치 전으로 되돌릴 백업도 여기 있으므로, 패치본을 설치해 둔 상태라면 먼저 되돌리거나 해루봇에서 플러그인을 업데이트한 뒤에 지웁니다.
 
-## CLI 단계별 실행
+<details>
+<summary>왜 이렇게 하나요? (해루봇 동작)</summary>
 
-`build.ps1` 은 아래 CLI 의 `build` 를 호출하는 런처다. 단계별로 돌리고 싶으면 직접 쓴다
-(경로 기본값은 전부 프로젝트 루트 기준):
+* 해루봇의 FFXIV 플러그인은 `<ACT>\Plugins\FFXIV_ACT_Plugin_KR` (또는 `_Global` / `_CN`) 에 있고, 해루봇은 "ACT 실행" 때마다
+  ACT 설정이 그 파일을 가리키게 되돌립니다. 그래서 이 프로그램은 그 파일을 제자리에서 바꿉니다.
+* 해루봇에서 플러그인을 업데이트하면 그 폴더를 통째로 지우고 공식본을 다시 받습니다. 패치본은 사라지지만, 공식 업데이트가
+  나왔다면 맞는 동작입니다. 백업은 작업 폴더에 있어 지워지지 않습니다.
+* 해루봇이 켜져 있는 동안은 ACT 를 강제로 끄므로, 설치할 때는 해루봇과 ACT 를 모두 끕니다.
 
-```powershell
-$cli = 'tool\bin\Release\net10.0\ActPluginRepack.dll'   # build.ps1 이 빌드해 둠
-dotnet $cli repack                                   # opcode/override/data 주입만
-dotnet $cli csv --csv-dir input\csv\ko               # CSV -> data\ 변환만
-dotnet $cli export --what opcodes                    # 내장 리소스 추출 (data / overrides / opcodes)
-```
+</details>
 
-## 동작 / 주의
+## 문서
 
-- **strong name**: 서명은 무효가 되지만 공개키 토큰을 유지하므로 ACT 의 full-trust 로컬 로드
-  (.NET Framework strong-name bypass)로 정상 로드된다.
-- 새 플러그인 버전이 나오면 그 DLL 로 같은 작업을 반복하면 된다. 리소스/Costura 이름이
-  바뀌었을 때만 `tool\Costura.cs` 의 상수를 수정.
-- 한글 메시지가 든 `.ps1` 은 UTF-8 **BOM** 으로 저장할 것(PS 5.1 인코딩 문제).
+* [동작 원리](docs/HowItWorks.md) — 무엇을 어디서 구하는지, 패치가 필요한지 판단하는 방법, 설치·되돌리기, 네트워크
+* [명령줄 (CLI)](docs/CLI.md) — 빠른 시작, `config.json`, 명령과 옵션, 종료 코드, 환경 변수
+* [재료 직접 넣기](docs/ManualInputs.md) — opcode / 스킬 이름 / RSV / 게임 데이터 / 시그니처 파일 형식
+* [개발과 배포](docs/Development.md) — 빌드, 시험, 코드 구조, 배포 묶음과 서명, 패치본 배포(hotfix)
 
 ## 라이선스 / 면책
 
-이 저장소의 도구 코드는 [MIT License](LICENSE)다.
+이 저장소의 코드는 [MIT License](LICENSE)입니다. 화면 글꼴은 Pretendard, D2Coding(SIL Open Font License 1.1)입니다.
 
-비공식 개인 도구이며 Square Enix, ravahn(FFXIV_ACT_Plugin)과 무관하다. 플러그인
-바이너리는 저장소에 포함하지 않으므로 공식 배포처에서 직접 받는다. 패치된 플러그인의
-사용(및 FINAL FANTASY XIV 관련 약관 준수)은 본인 책임이다.
+비공식 개인 도구이며 Square Enix, ravahn(FFXIV_ACT_Plugin)과 무관합니다. 플러그인 바이너리는 저장소에 포함하지 않고 공식
+배포처에서 받습니다. 패치된 플러그인의 사용(및 FINAL FANTASY XIV 관련 약관 준수)은 본인 책임입니다.
 FINAL FANTASY XIV © SQUARE ENIX CO., LTD.

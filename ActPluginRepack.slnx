@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ActPluginRepack.Cli/ActPluginRepack.Cli.csproj" />
+    <Project Path="src/ActPluginRepack.Core/ActPluginRepack.Core.csproj" />
+    <Project Path="src/ActPluginRepack.Gui/ActPluginRepack.Gui.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ActPluginRepack.Tests/ActPluginRepack.Tests.csproj" />
+  </Folder>
+</Solution>

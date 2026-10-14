@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Core 회귀 시험. 게임 파일이 필요한 시험(SigRegen 백테스트)은 환경 변수가 있을 때만 돈다. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ActPluginRepack.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ActPluginRepack.Core\ActPluginRepack.Core.csproj" />
+    <!-- ElevationTests 가 실제 CLI 를 실행한다 — 시험 프로젝트를 빌드할 때 같은 구성(Debug/Release)으로 같이 빌드되게
+         (어셈블리는 참조하지 않음). ElevationTests 는 시험 어셈블리의 bin\<구성>\<tfm> 에서 구성을 읽어 같은 구성의 CLI 를 찾는다 -->
+    <ProjectReference Include="..\..\src\ActPluginRepack.Cli\ActPluginRepack.Cli.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

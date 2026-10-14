@@ -1,0 +1,28 @@
+// config.json 으로 복사해서 쓴다 (config.json 은 git 에 올라가지 않음).
+// detect --save 나 GUI(게임 위치 설정, 설정 화면)가 config.json 을 다시 쓰면 바꾼 항목 말고는 그대로 두지만 주석은 사라진다.
+//
+// sharpVision: (선택) 직접 빌드한 SharpVision 실행 파일(.exe 또는 .dll) 경로. 보통은 적지 않는다 -
+//              없으면 prepare 가 GitHub 최신 릴리스를 tools\SharpVision\ 에 받아 쓴다.
+//              https://github.com/pnsdh/SharpVision
+// oxidizer:    (선택) true 면 SharpVision 대신 xiv-data-oxidizer 로 CSV 추출 (결과는 같음). 소스를 받아
+//              빌드하므로 git + Rust(https://rustup.rs) 필요. tools\xiv-data-oxidizer\ 에 자동으로 받는다.
+//              직접 관리하는 clone 을 쓰려면 그 폴더 경로. https://github.com/fae-industries/xiv-data-oxidizer
+// localDiff:   (선택) 기본 켜짐 — opcode 가 아직 공개되지 않았을 때 opcodediff 를 로컬에서 실행해 직접 추출한다.
+//              Python 3.12+ 는 py 런처로 찾고(또는 "python": "C:\\...\\python.exe"), 없으면 휴대용 Python 을 받아 쓴다.
+//              radare2 와 Python 패키지는 tools\ 에 자동으로 받는다. 끄려면 false.
+// ida:         (선택) IDA Pro 설치 폴더. 공개본도 로컬 opcodediff 결과도 없을 때 직접 추출한다.
+//              IDA 9 + Hex-Rays 디컴파일러 필요. 적지 않으면 Program Files 의 IDA* 폴더(9 이상)를 찾아 쓰고,
+//              false 면 쓰지 않는다.
+// idaTarget:   (선택) IDA 로 분석할 exe 의 지역. 기본 simplified-chinese — 중국판·글로벌·한국은 같은 버전이면
+//              opcode 가 같아 한 번만 분석하며, 그 지역 클라이언트가 없으면 같은 버전 exe 를 공식 패치 서버에서 받는다.
+//              global / korean 이면 그 exe 를 보정 시그니처와 함께 분석한다.
+// clients:     패치된 게임 클라이언트. 키는 지역 - global / korean / simplified-chinese /
+//              traditional-chinese. 경로는 설치 폴더 / game 폴더 / ffxiv_dx11.exe 아무거나.
+//              가진 클라이언트만 적는다.
+{
+  // "ida": "D:\\Tools\\IDA Professional 9.4",   (Program Files 밖에 설치했을 때만)
+  "clients": {
+    "korean": "C:\\Program Files (x86)\\FINAL FANTASY XIV - KOREA",
+    "global": "C:\\Program Files (x86)\\SquareEnix\\FINAL FANTASY XIV - A Realm Reborn"
+  }
+}

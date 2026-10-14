@@ -1,0 +1,128 @@
+﻿<UserControl x:Class="ActPluginRepack.Gui.Views.RunView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 위: 제목 / 단계 / 결과. 창이 낮으면 스크롤한다 (최대 높이는 코드에서: 기록을 펼치면 기록에 자리를 남긴다) -->
+        <ScrollViewer x:Name="TopScroll" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="{Binding Title}" Style="{StaticResource PageTitle}" />
+
+                <!-- 단계 목록 + 진행 막대 -->
+                <ui:Card Padding="24,16">
+                    <StackPanel>
+                        <ItemsControl ItemsSource="{Binding Steps}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="32" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <ui:SymbolIcon Symbol="{Binding State, Converter={StaticResource StepIcon}}" FontSize="20"
+                                                       Foreground="{Binding State, Converter={StaticResource StateBrush}}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="15" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                        <!-- 길면 잘리므로 마우스를 올리면 전체를 보여 준다 -->
+                                        <TextBlock Grid.Column="2" Text="{Binding Detail}" Style="{StaticResource Caption}" ToolTip="{Binding Detail}"
+                                                   VerticalAlignment="Center" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ProgressBar Value="{Binding Progress}" Maximum="100" Height="4" Margin="0,12,0,0"
+                                     IsIndeterminate="False" />
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0"
+                                    Visibility="{Binding IsRunning, Converter={StaticResource Visible}}">
+                            <ui:ProgressRing IsIndeterminate="True" Width="18" Height="18" />
+                            <TextBlock Text="{Binding RunningText}" Style="{StaticResource Body}" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            <!-- 설치/되돌리기 중에는 도중에 멈출 수 없으므로 숨긴다 -->
+                            <ui:Button Content="취소" Icon="{ui:SymbolIcon Dismiss24}" Margin="16,0,0,0" Command="{Binding CancelCommand}"
+                                       Visibility="{Binding CanCancel, Converter={StaticResource Visible}}" />
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- 결과 (나오면 코드에서 보이는 곳으로 스크롤한다: 기록을 펼쳐 위쪽이 줄어도 [확인]이 가려지지 않게) -->
+                <ui:Card x:Name="ResultCard" Margin="0,12,0,0" Padding="24,20"
+                         Visibility="{Binding ResultKind, Converter={StaticResource Visible}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <ui:SymbolIcon Symbol="{Binding ResultKind, Converter={StaticResource ResultIcon}}" FontSize="40" VerticalAlignment="Top"
+                                       Foreground="{Binding ResultKind, Converter={StaticResource StateBrush}}" />
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0">
+                            <TextBlock Text="{Binding ResultTitle, Converter={StaticResource KeepAll}}" Style="{StaticResource Headline}" />
+                            <TextBlock Text="{Binding ResultMessage, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,6,0,0" />
+                            <WrapPanel Margin="0,16,0,0">
+                                <!-- Enter 로도 [확인] (IsDefault 는 보이고 누를 수 있을 때만 동작) -->
+                                <ui:Button Content="확인" Appearance="Primary" Icon="{ui:SymbolIcon Checkmark24}" Padding="20,8" IsDefault="True"
+                                           Command="{Binding CloseCommand}" Margin="0,0,0,8" />
+                                <ItemsControl ItemsSource="{Binding Actions}" Focusable="False">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <ui:Button Content="{Binding Text}" Command="{Binding RunCommand}" Margin="12,0,0,8">
+                                                <ui:Button.Icon><ui:SymbolIcon Symbol="{Binding Icon}" /></ui:Button.Icon>
+                                            </ui:Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </WrapPanel>
+                            <!-- 결과 버튼을 눌렀지만 할 수 없을 때의 안내 (ACT 가 실행 중 등) -->
+                            <TextBlock Text="{Binding ActionNote, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,4,0,0"
+                                       Visibility="{Binding ActionNote, Converter={StaticResource Visible}}" />
+                        </StackPanel>
+                    </Grid>
+                </ui:Card>
+
+                <!-- 자세한 기록 펼치기 / 복사 -->
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <ui:Button Content="자세한 기록" Icon="{ui:SymbolIcon DocumentText24}" Appearance="Transparent"
+                               Command="{Binding ToggleLogCommand}" />
+                    <ui:Button Content="{Binding CopyText}" Icon="{ui:SymbolIcon Copy24}" Appearance="Transparent"
+                               Command="{Binding CopyLogCommand}" Visibility="{Binding ShowLog, Converter={StaticResource Visible}}" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 자세한 기록 (접어 둠): 남은 높이를 모두 쓴다 -->
+        <Border Grid.Row="1" Margin="0,6,0,0" CornerRadius="8" Padding="12,10"
+                Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                Visibility="{Binding ShowLog, Converter={StaticResource Visible}}">
+            <ListBox x:Name="LogList" ItemsSource="{Binding Log}" VirtualizingPanel.IsVirtualizing="True"
+                     Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemContainerStyle>
+                    <!-- 기록 줄은 고를 대상이 아니다: 선택 하이라이트 없이 글자만 -->
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter Margin="2,1" />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                        <Setter Property="Focusable" Value="False" />
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Text}" Style="{StaticResource Mono}"
+                                   Foreground="{Binding Kind, Converter={StaticResource StateBrush}}" />
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+    </Grid>
+</UserControl>

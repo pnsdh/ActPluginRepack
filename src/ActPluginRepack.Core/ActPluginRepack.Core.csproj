@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 모든 기능(재료 수집 / 시그니처 / 리팩 / 설치)을 담는 라이브러리. CLI 와 GUI 가 참조한다. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ActPluginRepack</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mono.Cecil" Version="0.11.5" />
+    <PackageReference Include="Iced" Version="1.21.0" />
+    <!-- 저장한 GitHub 토큰 암호화 (Windows DPAPI, 현재 사용자만 풂) -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+
+  <!-- 형식은 internal 로 두고 프런트엔드에만 연다 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="ActPluginRepack" />
+    <InternalsVisibleTo Include="ActPluginRepack.Gui" />
+    <InternalsVisibleTo Include="ActPluginRepack.Tests" />
+  </ItemGroup>
+
+  <!-- IDA opcode 추출이 작업 폴더에 복사하는 래퍼/시그니처 보정 (실행 파일 옆 ida\ 로) -->
+  <ItemGroup>
+    <None Include="Opcodes\ida\**" Link="ida\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
