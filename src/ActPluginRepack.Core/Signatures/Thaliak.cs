@@ -37,14 +37,43 @@ internal static class Thaliak
             if (Trusted(path)) return path;
             Log.Warn($"[thaliak] {path} 이(가) 깨졌거나 서명이 맞지 않아 다시 받음");
         }
-        string url = PatchUrl(region, version);
-        Log.Note($"[thaliak] {region.Name} {version} exe 받는 중: {url}");
-        byte[] exe = DownloadExe(url, path);
+        byte[] exe = DownloadFromRelease(region, version, path);
         // exe 안의 빌드 날짜가 요청한 버전 날짜와 다르면 엉뚱한 패치를 받았을 수 있다 (같은 날짜의 다른 패치 등)
         if (BuildDate(exe) is { } built && GameVersion.DatePart(version) is { } date && built != date)
             Log.Warn($"[thaliak] 받은 exe 의 빌드 날짜({built})가 요청한 버전({version})과 다름 - 비교 결과를 확인할 것");
         return path;
     }
+
+    // 그 버전의 패치에서 exe 를 받는다. 그 패치에 exe 가 없으면(큰 출시 묶음 — 7.3 의 D2025.07.18.0003.0000 은 exe 가 같은 묶음의
+    // .0000 조각에 있었다) 같은 출시 묶음(처음 내려준 시각이 같음)의 다른 조각을 큰 버전부터 본다 — exe 가 든 마지막 조각이 그 출시의
+    // exe 다. 묶음을 모르면(시각 없음) 원래 실패 그대로.
+    private static byte[] DownloadFromRelease(Region region, string version, string path)
+    {
+        string url = PatchUrl(region, version);
+        Log.Note($"[thaliak] {region.Name} {version} exe 받는 중: {url}");
+        try { return DownloadExe(url, path); }
+        catch (ExeNotInPatchException)
+        {
+            var patches = Patches(RepoOf(region));
+            string? offered = patches.LastOrDefault(p => p.Url == url).Offered;
+            if (offered == null) throw;
+            foreach (var other in BundleOthers(patches.Select(p => (p.Version, p.Url, p.Offered)), url, offered))
+            {
+                Operation.ThrowIfCancelled();
+                Log.Note($"[thaliak] 그 패치에 exe 가 없어 같은 출시 묶음의 {other.Version} 에서 받는 중: {other.Url}");
+                try { return DownloadExe(other.Url, path); }
+                catch (ExeNotInPatchException) { }
+            }
+            throw;
+        }
+    }
+
+    // 같은 출시 묶음(처음 내려준 시각이 같음)의 다른 조각들, 큰 버전부터 (시험용으로 따로)
+    internal static List<(string Version, string Url)> BundleOthers(IEnumerable<(string Version, string Url, string? Offered)> patches, string url,
+                                                                   string offered) =>
+        patches.Where(p => p.Offered == offered && p.Url != url)
+            .OrderByDescending(p => p.Version, StringComparer.Ordinal)
+            .Select(p => (p.Version, p.Url)).Distinct().ToList();
 
     // 지역들 중 이 버전을 가장 먼저 내려준 시각. 한 지역의 패치 목록을 받지 못해도 나머지로 (모두 못 받았을 때만 실패로)
     public static DateTime? FirstReleasedAt(IEnumerable<Region> regions, string version)
@@ -177,7 +206,7 @@ internal static class Thaliak
             // 패치는 파일을 순서대로 기록한다 — exe 를 다 받은 뒤 다른 파일이 시작되면 나머지(수백 MB~GB)는 안 받는다
             if (ParseFile(body, ref exe) == FileChunk.Other && exe != null && exe.Complete) break;
         }
-        if (exe == null || !exe.Complete) throw new ToolException($"{url} 에 {TargetFile} 가 없거나 일부만 있습니다.");
+        if (exe == null || !exe.Complete) throw new ExeNotInPatchException($"{url} 에 {TargetFile} 가 없거나 일부만 있습니다.");
         return exe.Data.ToArray();
     }
 

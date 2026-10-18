@@ -113,6 +113,7 @@ internal static class Prepare
         // 4) opcode
         run.Stage(OpcodeStage);
         var opcodes = o.Opcodes ? CollectOpcodes(ws, o, pluginPath, config, games, run) : null;
+        if (o.Sigcheck) CheckDrift(ws, signatures, run);
 
         // 5) CSV
         run.Stage(CsvStage);
@@ -298,6 +299,22 @@ internal static class Prepare
         });
     }
 
+    // 맞긴 맞는데 직전 출시와 다르게 맞는 시그니처 — 경고만 (판단은 그대로). 후크가 정상일 때만 (깨졌으면 그쪽이 먼저).
+    // opcode 단계 뒤에 돈다: 직전 출시 exe 를 로컬 opcodediff 가 받아 두므로 (여기서는 받지 않음)
+    private static void CheckDrift(Workspace ws, SignatureStep sig, StepRunner run)
+    {
+        if (sig.Check is not { CriticalOk: true } check) return;
+        Log.Info();
+        Log.Section("[sigdrift] 직전 출시 exe 와 비교");
+        run.Step(DriftStep, () =>
+        {
+            var drift = SignatureDrift.Run(ws, check);
+            return drift.Suspects.Count > 0
+                ? (StepStatus.Warning, $"직전 버전과 다르게 맞는 시그니처가 {drift.Suspects.Count}개 있습니다 - ACT 의 일부 기능이 이상할 수 있습니다.")
+                : (StepStatus.Ok, drift.Checked > 0 ? "직전 버전과 같은 모양으로 맞습니다." : "받아 둔 직전 버전 exe 가 없어 건너뛰었습니다.");
+        }, failed: StepStatus.Warning);
+    }
+
     // opcode 단계의 결과
     //   Missing          opcode 를 못 구한 클라이언트
     //   DownloadFailure  그 출처를 받지 못한 까닭 (null 이면 출처는 응답했지만 아직 공개 전)
@@ -438,7 +455,7 @@ internal static class Prepare
     }
 
     // 화면이 맞춰 쓰는 단계·진행 이름 (Jobs: 진행 막대를 나누고, 결과에 붙일 경고를 고른다)
-    public const string PluginStep = "plugin", GameStepPrefix = "game ";
+    public const string PluginStep = "plugin", GameStepPrefix = "game ", DriftStep = "sigdrift";
     public const string OpcodeStage = "opcode", CsvStage = "CSV", DoneStage = "완료";
 
     internal const string MissingItemsVerdict = "패치가 필요한지 판단할 수 없습니다. opcode 출처에 빠진 항목이 있습니다.";

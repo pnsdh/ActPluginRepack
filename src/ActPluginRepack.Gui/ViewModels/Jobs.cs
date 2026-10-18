@@ -161,12 +161,15 @@ internal static class Jobs
                 message += $"\n\n참고: 공식 플러그인 최신 버전을 받는 중에 문제가 있었습니다.\n{plugin.Message}";
             if (r.Steps.Any(s => s.Status != StepStatus.Ok && !s.Name.StartsWith(Prepare.GameStepPrefix, StringComparison.Ordinal)))
                 message += $"\n\n일부 단계에 경고가 있습니다. [{Titles.Log}]에서 확인하세요.";
+            if (r.Steps.Any(s => s.Name == Prepare.DriftStep && s.Status == StepStatus.Warning))
+                message += "\n\n" + Notes.Drift;
         }
         if (r.PatchNeeded == true && r.UnconfirmedOpcodes.Count > 0)
             message += "\n\n" + Notes.Unconfirmed;
         if (r.PatchNeeded == true && r.RegeneratedSignatures.Count > 0)
-            message += "\n\n플러그인의 핵심 부분(패킷을 받는 부분)을 공개된 수정 없이 이 PC 에서 직접 찾아 고쳤습니다. " +
-                       $"게임이 튕기거나 ACT 에 전투 기록이 잡히지 않으면 첫 화면의 [{Titles.Restore}]를 누르고, 공식 플러그인이 갱신된 뒤 다시 누르세요.";
+            // 패킷 후크와 메모리 시그니처(게임 메모리에서 정보를 읽는 위치) 둘 다 해당한다
+            message += "\n\n플러그인이 게임과 연결되는 부분 일부를 공개된 수정 없이 이 PC 에서 직접 찾아 고쳤습니다. " +
+                       $"게임이 튕기거나 ACT 에 전투 기록이 잡히지 않는 등 이상하면 첫 화면의 [{Titles.Restore}]를 누르고, 공식 플러그인이 갱신된 뒤 다시 누르세요.";
         if (r.Outdated.Count > 0)
             message += $"\n\n참고: {string.Join(", ", r.Outdated.Select(c => c.Region.Label))} 클라이언트는 최신 버전이 아니라 이번 확인에서 제외했습니다. " +
                        "그 서버에서 플레이할 때는 런처로 업데이트한 뒤 다시 누르세요.";

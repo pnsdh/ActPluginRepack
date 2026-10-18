@@ -51,6 +51,11 @@ internal static class Notes
         "공식 플러그인이 지금 게임 버전과 이미 맞고, ACT 에도 그 공식 플러그인이 설치되어 있습니다. 따로 고칠 필요가 없습니다. " + NextUpdate;
 
     // 확인된 공개 자료 없이 정한 opcode 로 고침 (첫 화면, 작업 결과) — 다시 누를 계기를 남긴다
+    // sigdrift 경고 (맞긴 맞는데 직전 버전과 다르게 맞는 메모리 시그니처 등 — 판단은 그대로)
+    public const string Drift =
+        "참고: 플러그인이 게임 메모리에서 정보를 읽는 위치 중 일부가 직전 버전과 다르게 맞습니다. " +
+        $"ACT 에서 파티·대상·주변 캐릭터 같은 정보가 이상하면 창 오른쪽 위 [{Titles.Help}]에서 {ReportToDiscord}";
+
     public const string Unconfirmed =
         "이번 버전 것으로 확인된 공개 자료가 나오기 전에, 이 PC 에서 직접 구했거나 확인되지 않은 값으로 고쳤습니다. " +
         $"큰 패치에서는 가끔 틀릴 수 있으니, 공개 자료가 나온 뒤(보통 몇 시간 안)에 [{Titles.Recheck}]를 누르세요.";

@@ -25,8 +25,11 @@ namespace FFXIV.Signatures;
 // 읽는 자리(readOffset)를 주면 — 플러그인이 일치 시작 A, 길이 L 에 대해 A+L+readOffset 의 값을 읽는 시그니처 —
 // 옛 exe 에서 그 자리가 어느 명령어의 어느 필드(RIP 변위, 변위, rel32, 즉치)의 시작인지 기억했다가 새 패턴에서
 // 같은 필드의 자리로 새 offset 을 낸다. 새 명령어의 모양·필드 크기가 같고, 주소성 필드면 가리키는 섹션도 같아야 한다.
-// 맞추지 못하면 실패로 보고한다. (전역 변수 주소 자체는 두 exe 사이에서 같은 대상인지 확인할 방법이 없다.)
-public static class SigRegen
+// 맞추지 못하면 실패로 보고한다. (이 경로는 전역 변수 주소 자체가 두 exe 사이에서 같은 대상인지 확인하지 않는다.)
+//
+// 위 방법으로 위치를 찾지 못했는데 읽는 값이 전역 변수를 가리키는 RIP 변위면, 그 변수를 쓰는 다른 함수들로 새 변수 위치를 찾아
+// 거기를 읽는 패턴을 만든다 (대체 경로 — SigRegenGlobal.cs, Result.GlobalAnchors).
+public static partial class SigRegen
 {
     // Pattern: 새 패턴 (pelite 표기, 실패·이미 맞음이면 null), Detail: 사람이 읽을 설명,
     // Offset: 새 읽는 자리 (readOffset 을 줬을 때. 이미 맞음이면 그 패턴 그대로의 offset),
@@ -35,8 +38,15 @@ public static class SigRegen
     // AlreadyMatches: 옛 패턴이 새 exe 에서도 옛 exe 와 같은 개수로 맞음 (readOffset 을 줬으면 읽는 필드도 같음)
     // OldRipOffset: 옛 명령어의 같은 값 (RipOffset 과 다르면 읽는 쪽의 ripOffset 도 바꿔야 함),
     // CallTargetUnverified: call 형인데 옛 call 대상에 대응하는 함수를 새 exe 에서 찾지 못해 대상이 같은지 확인하지 못함
+    // GlobalAnchors: 전역 변수 기준 대체 경로로 만들었으면 근거 함수 수 (같은 코드가 아니라 같은 변수를 찾은 것), 아니면 null
+    // ReadsOtherGlobal: 옛 패턴이 새 exe 에서도 같은 개수로 맞지만, 그 변수를 쓰는 다른 함수들(근거 2개 이상, 모두 일치)로 보면 다른 변수를
+    //   읽는다 — 그래서 AlreadyMatches 가 아니고, 근거가 가리키는 곳으로 다시 만들었으면 Pattern, 못 만들었으면 실패
     public sealed record Result(string? Pattern, string Detail, int? Offset = null, int? RipOffset = null, string? ReadField = null,
-                                bool AlreadyMatches = false, int? OldRipOffset = null, bool CallTargetUnverified = false);
+                                bool AlreadyMatches = false, int? OldRipOffset = null, bool CallTargetUnverified = false)
+    {
+        public int? GlobalAnchors { get; init; }
+        public bool ReadsOtherGlobal { get; init; }
+    }
 
     private const int MaxMatches = 16;
 
@@ -91,17 +101,32 @@ public static class SigRegen
             }
             if (field == null) return new Result(null, "새 exe 에서도 이미 맞음" + unverified, AlreadyMatches: true, CallTargetUnverified: unverified != "");
             var same = NewReadOffset(newExe, nowMatches, field, pre: 0, out string sameWhy);
-            return same == null
-                ? new Result(null, $"새 exe 에서도 맞지만 읽는 자리가 달라짐 - {sameWhy}")
-                : new Result(null, $"새 exe 에서도 이미 맞음{unverified}, 읽는 값: {same.Value.Field}", same.Value.Offset, same.Value.RipOffset,
-                             same.Value.Field, AlreadyMatches: true, field.RipOffset, unverified != "");
+            if (same == null) return new Result(null, $"새 exe 에서도 맞지만 읽는 자리가 달라짐 - {sameWhy}");
+            // call 형이 아니면 개수만 같아서는 같은 곳인지 모른다 — 패턴이 사라졌다가 다른 함수에서 다시 맞을 수 있다 (OverlayPlugin/cactbot
+            // JobGauge70: 7.4 에서 0곳, 7.5 부터 EnvManager 를 읽는 다른 곳에 1곳). 읽는 값이 전역 변수면 그 변수를 쓰는 다른 함수들로 확인한다.
+            if (!Array.Exists(slots, s => s.Kind == SlotKind.Jump) && GlobalApplies(field) &&
+                OtherGlobal(oldExe, newExe, oldMatches, nowMatches, field, same.Value.Offset, same.Value.RipOffset ?? 0) is { } other)
+                return other;
+            return new Result(null, $"새 exe 에서도 이미 맞음{unverified}, 읽는 값: {same.Value.Field}", same.Value.Offset, same.Value.RipOffset,
+                              same.Value.Field, AlreadyMatches: true, field.RipOffset, unverified != "");
         }
 
         // 패턴이 끝난 직후의 필드 값(패턴 밖)도 처음엔 위치를 가리는 단서로 쓰고, 못 찾으면 빼고 다시
-        var strict = Rebuild(oldExe, newExe, slots, oldMatches, field, looseCut: false, out bool hasCut);
-        if (strict.Pattern != null || !hasCut) return strict;
-        var loose = Rebuild(oldExe, newExe, slots, oldMatches, field, looseCut: true, out _);
-        return loose.Pattern != null ? loose with { Detail = loose.Detail + ", 패턴 밖 값 무시" } : strict;
+        var result = Rebuild(oldExe, newExe, slots, oldMatches, field, looseCut: false, out bool hasCut);
+        if (result.Pattern == null && hasCut)
+        {
+            var loose = Rebuild(oldExe, newExe, slots, oldMatches, field, looseCut: true, out _);
+            if (loose.Pattern != null) result = loose with { Detail = loose.Detail + ", 패턴 밖 값 무시" };
+        }
+        if (result.Pattern != null || field == null || !GlobalApplies(field)) return result;
+        // 위치를 찾지 못함 -> 읽던 전역 변수 기준으로 (대체 경로 안의 실패 — 스캔 시간 초과 등 — 도 원래 실패 까닭과 함께)
+        Result? global;
+        string globalWhy;
+        try { global = ViaGlobal(oldExe, newExe, oldMatches, field, out globalWhy); }
+        catch (SignatureException ex) { (global, globalWhy) = (null, ex.Message); }
+        return global != null
+            ? global with { Detail = $"{global.Detail} - 위치 대응 실패: {result.Detail}" }
+            : result with { Detail = $"{result.Detail} (전역 변수 기준 대체 경로: {globalWhy})" };
     }
 
     // call 대상을 대응시키지 못한 일치가 있으면 그 사실을 Detail 에 붙일 문구 (모두 대응했으면 "")
@@ -628,7 +653,7 @@ public static class SigRegen
 
 // 디스어셈블과 함수/위치 대응을 위한 exe 표현 (.text + .pdata). 크다 (exe 파일 크기의 몇 배) — 같은 exe 는 한 번만 만들어 돌려 쓸 것.
 // 안에 캐시가 있어 여러 스레드에서 동시에 쓰면 안 된다 (ScanTarget / SigPattern 은 된다).
-public sealed class CodeImage
+public sealed partial class CodeImage
 {
     public ScanTarget Target { get; }
     public PeImage Image => _pe;

@@ -211,7 +211,7 @@ internal static class Build
 
     private static string? ExistingOrNull(string dir) => Directory.Exists(dir) ? dir : null;
 
-    // 클라이언트 하나라도 0건이면 빌드 중단 — 안 맞는 시그니처로는 그 기능이 확실히 실패한다.
+    // 클라이언트 하나라도 0건이면(deucalion 후크는 정해진 개수가 아니면) 빌드 중단 — 안 맞는 시그니처로는 그 기능이 확실히 실패한다.
     // memory/oodle 은 그 클라이언트가 쓰는 변형에 해당하는 것만 본다. 클라이언트 설정이 없으면 검증 없이 진행.
     private static void VerifySignatures(List<GameClient> clients, string? sigDir)
     {
@@ -237,13 +237,18 @@ internal static class Build
                 int n = SigLib.Parse(pattern).Scan(exe).Count;
                 string line = $"[sig] {client.Name} {(kind == SignatureKinds.Deucalion ? "" : $"{kind}.{variant}.")}{name}: {n}곳";
                 if (n == 0) { Log.Error(line); broken.Add($"{client.Name}/{name}"); }
+                else if (kind == SignatureKinds.Deucalion && !Deucalion.Usable(name, n))
+                {
+                    Log.Error($"{line} - deucalion 은 정확히 {Deucalion.RequiredMatches(name)}곳이어야 후크를 겁니다");
+                    broken.Add($"{client.Name}/{name}");
+                }
                 // 플러그인 메모리/Oodle 은 첫 번째로 맞는 곳만 쓴다 — 여러 곳이면 그 첫 곳이 맞는지 확인할 것
                 else if (n > 1 && kind != SignatureKinds.Deucalion) Log.Warn(line + " - 여러 곳에 맞음, 플러그인은 첫 번째 위치만 씀");
                 else Log.Section(line);
             }
         }
         if (broken.Count > 0)
-            throw new ToolException($"게임 exe 에서 맞는 위치를 찾지 못한 시그니처가 있습니다: {string.Join(", ", broken)}");
+            throw new ToolException($"게임 exe 에서 맞는 위치를 찾지 못했거나 맞는 곳 수가 다른 시그니처가 있습니다: {string.Join(", ", broken)}");
     }
 
 }

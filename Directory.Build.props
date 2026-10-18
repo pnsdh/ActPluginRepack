@@ -1,7 +1,7 @@
 <Project>
   <!-- 모든 프로젝트 공통. 배포 버전은 여기 한 곳만 바꾼다 (GUI 창 제목과 도움말 화면, CLI 의 version 명령, 업데이트 확인, publish.ps1 의 zip 이름). -->
   <PropertyGroup>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Authors>pnsdh</Authors>
     <Copyright>pnsdh</Copyright>
     <RepositoryUrl>https://github.com/pnsdh/ActPluginRepack</RepositoryUrl>

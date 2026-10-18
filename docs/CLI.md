@@ -240,6 +240,12 @@ UTF-8):
   옛 대상과 대응해야 하고, 대응하는 함수를 찾지 못해 확인하지 못했으면 `callTargetUnverified: true` (`detail` 에도 적음).
 - `ripOffset`: 읽는 필드가 RIP 변위일 때 새 명령어에서 변위 뒤로 남는 바이트 수(예: `cmp byte ptr [rip+x],0` 은 1).
 - call 은 hex 표기에서 `E8????????` 로 낸다. 대안·건너뛰기가 든 패턴은 hex 로 나타낼 수 없어 `ok: false`(`pelitePattern` 에 있음).
-- 전역 변수 주소 자체가 두 exe 에서 같은 대상인지는 확인할 방법이 없다 — 만든 패턴은 `sigscan` 으로 다시 보고, 게임에서 값을 확인할 것.
+- `globalAnchors`: 시그니처를 담은 함수를 새 exe 에서 찾지 못해, 읽던 전역 변수를 쓰는 다른 함수들로 새 위치를 찾아 만든 결과면
+  근거 함수 수(2 이상), 아니면 null ([라이브러리 README](../lib/FFXIV.Signatures/README.md#재생성-sigregen)). 이때 새 패턴은 옛 일치 수와
+  상관없이 **한 곳**에만 맞고, `offset` 은 0 또는 음수, `ripOffset` 이 바뀌었을 수 있다 — 같은 코드가 아니라 같은 변수를 찾은 것.
+- `readsOtherGlobal`: 옛 패턴이 새 exe 에서도 같은 개수로 맞지만 다른 변수를 읽음(그 변수를 쓰는 다른 함수들로 확인 — 패턴이 사라졌다가
+  다른 함수에서 다시 맞은 것). 이때 `unchanged` 는 false 이고, 진짜 위치로 다시 만들었으면 `ok: true` 와 새 `pattern`, 못 만들었으면
+  `ok: false`. 전에는 이런 경우가 `unchanged: true`(틀린 값)로 나왔다.
+- 그 밖의 결과는 전역 변수 주소 자체가 두 exe 에서 같은 대상인지 확인하지 않는다 — 만든 패턴은 `sigscan` 으로 다시 보고, 게임에서 값을 확인할 것.
 
 두 형식 모두 필드는 추가만 하고 빼거나 의미를 바꾸지 않는다(바꿔야 하면 `format` 을 올린다).

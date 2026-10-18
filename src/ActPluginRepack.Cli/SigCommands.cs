@@ -188,6 +188,10 @@ internal static class SigCommands
                     if (pattern != null && r.RipOffset is { } rip) w.WriteNumber("ripOffset", rip); else w.WriteNull("ripOffset");
                     w.WriteString("readField", r.ReadField);
                     w.WriteBoolean("callTargetUnverified", r.CallTargetUnverified);
+                    // 전역 변수 기준 대체 경로로 만들었으면 근거 함수 수 (같은 코드가 아니라 같은 변수를 찾은 것), 아니면 null
+                    if (pattern != null && r.GlobalAnchors is { } anchors) w.WriteNumber("globalAnchors", anchors); else w.WriteNull("globalAnchors");
+                    // 옛 패턴이 같은 개수로 맞지만 다른 변수를 읽음 (그 변수를 쓰는 함수들로 확인 — unchanged 가 아니고, 다시 만들었으면 pattern)
+                    w.WriteBoolean("readsOtherGlobal", r.ReadsOtherGlobal);
                     w.WriteString("detail", detail);
                     w.WriteEndObject();
                 }

@@ -134,4 +134,31 @@ public class DeucalionTests
         Assert.DoesNotContain(Send, after);
         Assert.Equal(2, after.Split("40 53 56 48 83 EC 38      ").Length - 1);
     }
+
+    // deucalion 은 Recv 3 / Send 2 / SendLobby 1 곳에 정확히 맞아야 후크를 건다 (더 많거나 적으면 맞는 곳이 있어도 못 씀).
+    // CreateTarget 후보는 1곳 이상이면 쓴다.
+    [Theory]
+    [InlineData("Recv", 3, true)]
+    [InlineData("Recv", 2, false)]
+    [InlineData("Recv", 4, false)]
+    [InlineData("Send", 2, true)]
+    [InlineData("Send", 1, false)]
+    [InlineData("SendLobby", 1, true)]
+    [InlineData("SendLobby", 2, false)]
+    [InlineData("CreateTarget.Normal", 1, true)]
+    [InlineData("CreateTarget.Normal", 2, true)]
+    [InlineData("CreateTarget.Normal", 0, false)]
+    [InlineData("recv", 2, false)] // 입력 파일의 이름처럼 대소문자를 가리지 않는다
+    [InlineData("recv", 3, true)]
+    public void HookNeedsTheExactMatchCountDeucalionRequires(string name, int matches, bool usable) =>
+        Assert.Equal(usable, Deucalion.Usable(name, matches));
+
+    // 점검·자동 복구·재현이 같이 쓰는 판단: deucalion 만 개수 규칙, 메모리/Oodle 은 1곳 이상 (첫 일치를 씀)
+    [Fact]
+    public void OnlyDeucalionHooksHaveACountRule()
+    {
+        Assert.False(Sigcheck.Usable(SignatureKinds.Deucalion, "Send", 3));
+        Assert.True(Sigcheck.Usable(SignatureKinds.Memory, "Send", 3));
+        Assert.False(Sigcheck.Usable(SignatureKinds.Memory, "Send", 0));
+    }
 }

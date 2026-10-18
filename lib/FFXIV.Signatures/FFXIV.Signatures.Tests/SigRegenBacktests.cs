@@ -41,4 +41,48 @@ public class SigRegenBacktests
             Assert.True(want.Select(m => m.Rva).Order().SequenceEqual(mine.Select(m => m.Rva).Order()) ||
                         want.Select(m => m.End).Order().SequenceEqual(mine.Select(m => m.End).Order()), name);
     }
+
+    // 시그니처를 담은 함수를 새 exe 에서 찾지 못해 전역 변수 기준 대체 경로로 만드는 실제 사례 (본가가 손으로 고친 것).
+    // 정답과 같은 패턴일 필요는 없고, 한 곳에만 맞아 같은 값(Want)을 읽으면 된다.
+    public static TheoryData<string, string, string, string, int, int> GlobalCases => new()
+    {
+        { "7.25h3 -> 7.30 OverlayPlugin EnmityHud", "2025.06.28.0000.0001", "2025.07.25.0000.0001", "488B8F????????488B01FF50??4C8B1D", 0, 0x29102F8 },
+        { "7.38 -> 7.4 cactbot kJobData", "2025.10.30.0000.0000", "2025.12.09.0000.0000", "488B3D????????33ED", -6, 0x298EF10 },
+    };
+
+    [Theory]
+    [MemberData(nameof(GlobalCases))]
+    public void RegeneratesThroughTheGlobalVariable(string name, string oldExe, string newExe, string oldHex, int offset, int want)
+    {
+        string? dir = Environment.GetEnvironmentVariable("FFXIV_SIGNATURES_BACKTEST_DIR");
+        if (dir == null) Assert.Skip("FFXIV_SIGNATURES_BACKTEST_DIR 없음");
+        string oldPath = Path.Combine(dir, oldExe + ".exe"), newPath = Path.Combine(dir, newExe + ".exe");
+        if (!File.Exists(oldPath) || !File.Exists(newPath)) Assert.Skip($"{name}: exe 없음");
+
+        var newImage = new CodeImage(newPath);
+        var r = SigRegen.Regenerate(new CodeImage(oldPath), newImage, SigPattern.HexToPelite(oldHex), offset);
+        Assert.True(r.Pattern != null, $"{name}: {r.Detail}");
+        Assert.True(r.GlobalAnchors >= 2, r.Detail);
+        var m = Assert.Single(SigPattern.Parse(r.Pattern!).Scan(newImage.Target));
+        Assert.Equal(want, SigValue.Resolve(newImage.Image, m, r.Offset!.Value, rip: true, r.RipOffset!.Value).ResolvedRva);
+    }
+
+    // 옛 패턴이 같은 개수(1곳)로 다시 맞지만 다른 변수(EnvManager)를 읽는 함정: OverlayPlugin/cactbot JobGauge70 은 7.4 에서 0곳이 됐다가
+    // 7.5 부터 다른 함수에서 1곳에 맞는다. "이미 맞음"이 아니라 근거가 가리키는 진짜 위치(정답 JobGauge74 의 값)로 다시 만들어야 한다.
+    [Fact]
+    public void RebuildsAMatchThatReadsAnotherVariable()
+    {
+        string? dir = Environment.GetEnvironmentVariable("FFXIV_SIGNATURES_BACKTEST_DIR");
+        if (dir == null) Assert.Skip("FFXIV_SIGNATURES_BACKTEST_DIR 없음");
+        string oldPath = Path.Combine(dir, "2025.10.30.0000.0000.exe"), newPath = Path.Combine(dir, "2026.04.21.0000.0000.exe");
+        if (!File.Exists(oldPath) || !File.Exists(newPath)) Assert.Skip("exe 없음");
+
+        var newImage = new CodeImage(newPath);
+        var r = SigRegen.Regenerate(new CodeImage(oldPath), newImage, SigPattern.HexToPelite("488B3D????????33ED"), -6);
+        Assert.True(r.ReadsOtherGlobal, r.Detail);
+        Assert.False(r.AlreadyMatches);
+        Assert.True(r.Pattern != null, r.Detail);
+        var m = Assert.Single(SigPattern.Parse(r.Pattern!).Scan(newImage.Target));
+        Assert.Equal(0x2A95990, SigValue.Resolve(newImage.Image, m, r.Offset!.Value, rip: true, r.RipOffset!.Value).ResolvedRva);
+    }
 }

@@ -324,8 +324,9 @@ internal static class Replay
         foreach (var h in sigs.Where(h => HookGroup(h.Name) == group).Select((h, i) => (h, i))
                      .OrderBy(x => SourceRank(x.h.Source)).ThenBy(x => VariantRank(x.h.Name)).ThenBy(x => x.i).Select(x => x.h))
         {
-            var points = Sigcheck.Points(SigLib.Parse(h.Pattern), exe, SignatureKinds.Deucalion);
-            if (points.Count > 0) return (points, $"{h.Source} {h.Name}");
+            var matches = SigLib.Parse(h.Pattern).Scan(exe);
+            if (Sigcheck.Usable(SignatureKinds.Deucalion, h.Name, matches.Count))
+                return (matches.Select(m => Sigcheck.PointOf(m, SignatureKinds.Deucalion)).ToHashSet(), $"{h.Source} {h.Name}");
         }
         return ([], null);
 

@@ -18,7 +18,7 @@ src\ActPluginRepack.Core\     기능 전부 (라이브러리) — CLI 와 GUI �
     Plugin\                   Costura 리소스 · Repacker(주입) · 플러그인 릴리스 · 메모리/Oodle 시그니처 · RSV · Exporter
     GameData\                 CSV 변환 · CSV 수집(oxidizer / SharpVision / 공개 저장소)
     Opcodes\                  opcode 수집(Yarukon / karashiiro / opcodediff / 로컬 / IDA) · 부가 출력
-    Signatures\               deucalion · sigcheck · 자동 복구 · Thaliak(옛 exe) · SigLib(라이브러리 오류 -> ToolException)
+    Signatures\               deucalion · sigcheck · 조용한 어긋남(sigdrift) · 자동 복구 · ClientStructs 검문 · Thaliak(옛 exe) · SigLib(라이브러리 오류 -> ToolException)
 src\ActPluginRepack.Cli\      명령줄 (옵션 해석 → Core 호출 → 콘솔 출력)
 src\ActPluginRepack.Gui\      화면 (WPF + WPF-UI, MVVM) — 간편/고급 모드, 관리자 권한 설치는 CLI 를 UAC 로 띄워서
 tests\ActPluginRepack.Tests\  Core 회귀 시험 (xUnit)

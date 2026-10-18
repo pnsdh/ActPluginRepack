@@ -18,6 +18,17 @@ internal static class Deucalion
     // deucalion 의 HookType 순서. .rdata 에 이 순서로 이어 붙어 있다.
     private static readonly string[] HookNames = ["Recv", "Send", "SendLobby"];
 
+    // deucalion 이 후크를 걸 때 요구하는 정확한 일치 수 (hook/recv.rs·send.rs·send_lobby.rs 의 setup — 다르면 SignatureMatchFailed 로
+    // 후크를 걸지 않는다. Recv 는 일치 순서대로 Chat / Lobby / Zone). 일치마다 하나로 센다 (procloader.rs find_pattern_matches —
+    // call 대상이 같아도 일치 수다). CreateTarget 은 패턴 말고도 확인하는 것이 있어 여기 없다 (1곳 이상이면 씀).
+    // 이름은 대소문자를 가리지 않는다 (input 의 이름처럼)
+    public static int? RequiredMatches(string hookName) => Required.TryGetValue(hookName, out int n) ? n : null;
+
+    private static readonly Dictionary<string, int> Required = new(StringComparer.OrdinalIgnoreCase) { ["Recv"] = 3, ["Send"] = 2, ["SendLobby"] = 1 };
+
+    // 이 일치 수로 deucalion 이 그 후크를 걸 수 있는지 (요구 수가 없는 것은 1곳 이상)
+    public static bool Usable(string hookName, int matches) => RequiredMatches(hookName) is { } n ? matches == n : matches > 0;
+
     private static readonly Regex QuotedPattern = new("\"([0-9A-Fa-f?$'{}()|\\[\\]\\- ]+)\"", RegexOptions.CultureInvariant);
     private static readonly Regex HexByte = new("[0-9A-Fa-f]{2}", RegexOptions.CultureInvariant);
     private static readonly Regex CreateTargetLabel = new(@"^ *Internal (\w+) sig error", RegexOptions.CultureInvariant);
@@ -90,6 +101,10 @@ internal static class Deucalion
         // 순서는 링커 배치일 뿐이라 내용으로도 확인한다: Recv 만 call 을 따라가는 형태, Send/SendLobby 는 함수 시작
         bool known = hooks.Count == HookNames.Length && hooks[0].Pattern.Contains('$') &&
                      hooks.Skip(1).All(h => !h.Pattern.Contains('$'));
+        // 이름을 가리지 못하면 Hook1.. 로 — 그러면 후크별 일치 개수 규칙(RequiredMatches)을 쓸 수 없으므로 알린다 (deucalion 의 시그니처
+        // 구성이 바뀐 것: 옛 1.4.x 는 4개였다)
+        if (!known && hooks.Count > 0)
+            Log.Warn($"[deucalion] 후크 시그니처 {hooks.Count}개의 이름(Recv/Send/SendLobby)을 가리지 못해 Hook1~{hooks.Count} 로 부름 - 일치 개수 규칙 없이 1곳 이상이면 정상으로 봄");
         result.InsertRange(0, hooks.Select((h, i) => new Sig(known ? HookNames[i] : $"Hook{i + 1}", h.Pattern)));
         if (result.Count == 0) throw new ToolException("deucalion dll 에서 시그니처를 찾지 못했습니다.");
         return result;

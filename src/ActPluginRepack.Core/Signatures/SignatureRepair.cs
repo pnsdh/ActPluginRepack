@@ -4,7 +4,8 @@ using System.Text.RegularExpressions;
 //   1) upstream deucalion (ff14wed/deucalion) — 소스(main 의 lib.rs / create_target.rs 상수)와 최신 릴리스 dll 의 시그니처.
 //      7.57 때 소스 수정이 공식 플러그인보다 약 5시간 빨랐다.
 //   2) 자동 복구 — 옛 exe 와 새 exe 를 비교해 새 시그니처를 만든다 (SigRegen).
-// 후보는 설정된 모든 클라이언트 exe 에서 검증해(0건이면 탈락) 통과한 것만 input\signatures 에 기록한다.
+// 후보는 설정된 모든 클라이언트 exe 에서 검증해(0건이거나 deucalion 후크의 정해진 개수가 아니면 탈락) 통과한 것만
+// input\signatures 에 기록한다.
 internal static class SignatureRepair
 {
     // upstream 상수 이름 -> sigcheck 의 이름
@@ -89,6 +90,9 @@ internal static class SignatureRepair
         // 같은 exe 의 ScanTarget 을 함께 써서 파일과 .text 문자열을 두 번 들고 있지 않게 (exe 하나에 120MB 남짓)
         public CodeImage Code(string path) => _codes.TryGetValue(path, out var c) ? c : _codes[path] = SigLib.Run(() => new CodeImage(Target(path)));
         public void Forget(string path) => _targets.Remove(path); // 지울 exe
+
+        // ClientStructs 자료 (게임 버전 -> 자료, 없으면 까닭) — 후보마다 다시 받지 않게
+        public readonly Dictionary<string, (ClientStructsData.Symbols? Data, string Why)> ClientStructs = [];
     }
 
     // 2) 옛 exe(원래 패턴이 맞던 버전)와 새 exe 를 비교해 다시 만든다. 깨진 클라이언트마다 시도하고,
@@ -101,7 +105,8 @@ internal static class SignatureRepair
             foreach (var row in b.Original)
             {
                 Operation.ThrowIfCancelled();
-                string? oldExe = OldExe(ws, exes, b.Client, row.Pattern, walkBack: row.Item.Critical, failures);
+                string? oldExe = OldExe(ws, exes, b.Client, row.Pattern, n => Sigcheck.Usable(row.Item.Kind, row.Item.Name, n),
+                                       walkBack: row.Item.Critical, failures);
                 if (oldExe == null) continue;
                 oldMatched = true;
                 string variant = row.Item.Kind == SignatureKinds.Deucalion ? "*" : row.Item.Variant;
@@ -137,18 +142,76 @@ internal static class SignatureRepair
                     Log.Warn($"[repair]   {r.Pattern} 는 다른 클라이언트에서 맞지 않거나 가리키는 곳이 다름");
                     continue;
                 }
+                // 메모리 시그니처는 독립 자료(ClientStructs 의 이름)로 한 번 더: 분명히 다른 것을 읽으면 버리고, 같으면 기록에 남긴다
+                string confirmed = "";
+                if (row.Item.Kind == SignatureKinds.Memory && ClientStructsCheck(ws, exes, clients, row, r.Pattern) is var (verdict, detail))
+                {
+                    if (verdict == ClientStructsData.Verdict.Mismatch)
+                    {
+                        Log.Warn($"[repair]   {r.Pattern} 는 ClientStructs 로 보면 다른 것을 읽음 ({detail}) - 쓰지 않음");
+                        continue;
+                    }
+                    if (verdict == ClientStructsData.Verdict.Confirmed) confirmed = $" - ClientStructs 확인: {detail}";
+                    else Log.Note($"[repair]   ClientStructs 로 확인하지 못함: {detail}");
+                }
                 string name = row.Item.Kind == SignatureKinds.Deucalion ? row.Item.Name : $"{row.Item.Variant}.{row.Item.Name}";
-                string from = $"sigregen {b.Client.Name} {Path.GetFileName(Path.GetDirectoryName(oldExe))} -> {b.Client.Version} - {r.Detail} - {counts}";
+                string from = $"sigregen {b.Client.Name} {Path.GetFileName(Path.GetDirectoryName(oldExe))} -> {b.Client.Version} - {r.Detail} - {counts}{confirmed}";
                 return new Candidate(name, r.Pattern, from);
             }
         }
         return null;
     }
 
+    // 메모리 시그니처 후보를 글로벌 클라이언트에서 ClientStructs 이름으로 대조한다 (ClientStructsData — 주소가 글로벌 exe 기준).
+    // 원래 패턴이 글로벌 옛 exe 에서 읽던 값과 후보가 글로벌 지금 exe 에서 읽는 값(둘 다 첫 일치 — 플러그인이 쓰는 것)을 비교.
+    // 해당 없으면 null: 글로벌에 쓰지 않는 변형, 원래 패턴이 글로벌에서 아직 쓰임(Validate 가 이미 같은 곳임을 확인함).
+    // 대조하려고 exe 를 받지는 않는다 (받아 둔 글로벌 옛 exe 만). 실패는 모름으로 — 검문 때문에 복구를 멈추지 않는다.
+    private static (ClientStructsData.Verdict, string)? ClientStructsCheck(Workspace ws, ExeCache exes, List<GameClient> clients,
+                                                                          Sigcheck.Row original, string candidate)
+    {
+        const ClientStructsData.Verdict unknown = ClientStructsData.Verdict.Unknown;
+        if (!Sigcheck.Applies(original.Item.Kind, original.Item.Variant, Region.Global)) return null;
+        var global = clients.FirstOrDefault(c => c.Region?.Name == Region.Global.Name && c.Version != null);
+        if (global == null) return (unknown, "글로벌 클라이언트가 없음");
+        try
+        {
+            if (original.Pattern.Scan(exes.Target(global.ExePath)).Count > 0) return null;
+            string? oldExe = OldExe(ws, exes, global, original.Pattern, n => n > 0, walkBack: false, [], download: false);
+            if (oldExe == null) return (unknown, "원래 패턴이 맞는 글로벌 옛 exe 를 받아 두지 않음");
+            var (oldData, oldWhy) = Data(Path.GetFileName(Path.GetDirectoryName(oldExe))!);
+            if (oldData == null) return (unknown, $"ClientStructs {oldWhy}");
+            var (newData, newWhy) = Data(global.Version!);
+            if (newData == null) return (unknown, $"ClientStructs {newWhy}");
+            if (Value(original.Pattern, oldExe) is not { } oldVa || Value(SigLib.Parse(candidate), global.ExePath) is not { } newVa)
+                return (unknown, "읽는 값을 계산하지 못함");
+            return ClientStructsData.Compare(oldData, oldVa, newData, newVa);
+        }
+        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+        {
+            return (unknown, $"검문하지 못함 ({ex.GetType().Name}: {ex.Message})");
+        }
+
+        (ClientStructsData.Symbols? Data, string Why) Data(string version)
+        {
+            if (!exes.ClientStructs.TryGetValue(version, out var got))
+                exes.ClientStructs[version] = got = (ClientStructsData.Load(version, out string why), why);
+            return got;
+        }
+
+        long? Value(SigPattern pattern, string exe)
+        {
+            var target = exes.Target(exe);
+            if (pattern.Scan(target).FirstOrDefault() is not { } m) return null;
+            return SigValue.Resolve(target.Image, m, 0, rip: true).ResolvedRva is { } rva ? rva + (long)target.Image.ImageBase : null;
+        }
+    }
+
     // 원래 패턴이 맞는 옛 exe: snapshots\<지역>\ 의 이전 버전(최신부터), 없으면 직전 출시(공식 패치 목록)를 받아서
     // walkBack: 직전 출시에서 안 맞으면 공식 패치 목록을 더 거슬러 올라간다 (패킷 후크만 — 경고 항목까지
     // 하면 원래부터 깨진 시그니처 때문에 exe 를 여러 번 받는다)
-    private static string? OldExe(Workspace ws, ExeCache exes, GameClient client, SigPattern pattern, bool walkBack, List<Exception> failures)
+    // download: false 면 받아 둔 것(snapshots)만 본다
+    private static string? OldExe(Workspace ws, ExeCache exes, GameClient client, SigPattern pattern, Func<int, bool> usable, bool walkBack,
+                                  List<Exception> failures, bool download = true)
     {
         if (client.Region == null || client.Version == null) return null;
         var paths = new List<string>();
@@ -161,10 +224,10 @@ internal static class SignatureRepair
                 .Select(d => Path.Combine(d, "ffxiv_dx11.exe")).Where(File.Exists)
                 .Where(p => !Thaliak.Supports(client.Region) || Thaliak.Trusted(p)));
         foreach (string p in paths)
-            if (Matches(exes, pattern, p)) return p;
+            if (Matches(exes, pattern, usable, p)) return p;
 
         // 받아 볼 버전: 직전 출시, 그다음(walkBack) 공식 패치 목록에서 앞선 패치들. 원래 패턴이 맞는 exe 를 찾으면 멈춘다.
-        if (!Thaliak.Supports(client.Region)) return null;
+        if (!download || !Thaliak.Supports(client.Region)) return null;
         var tried = paths.Select(p => Path.GetFileName(Path.GetDirectoryName(p))!).ToHashSet();
         var candidates = new List<string>();
         string? previous = null;
@@ -193,7 +256,7 @@ internal static class SignatureRepair
                 continue;
             }
             // 받은 뒤의 실패(스캔 시간 초과 등)는 받기 실패가 아니다 — 더 받아 봐도 같으므로 멈춘다 (거슬러 올라가며 받은 것은 지우고)
-            if (!TryMatches(exes, pattern, p, out bool matched))
+            if (!TryMatches(exes, pattern, usable, p, out bool matched))
             {
                 if (fresh && version != previous)
                 {
@@ -205,7 +268,7 @@ internal static class SignatureRepair
             try
             {
                 if (matched) return p;
-                Log.Note($"[repair] {client.Name} {version} exe 에서도 원래 패턴이 0건 - 더 앞 버전 시도");
+                Log.Note($"[repair] {client.Name} {version} exe 에서도 원래 패턴을 쓸 수 없음 (0건 또는 개수가 다름) - 더 앞 버전 시도");
                 // 직전 출시 버전 exe 는 다른 항목에도 쓰이므로 남기고, 거슬러 올라가며 받은 것만 지운다
                 if (fresh && version != previous)
                 {
@@ -221,14 +284,16 @@ internal static class SignatureRepair
         return null;
     }
 
-    // 원래 패턴이 이 exe 에 맞는지. 스캔이 실패하면(시간 초과 — 지나치게 넓은 패턴) 알리고 false
-    private static bool Matches(ExeCache exes, SigPattern pattern, string exe) => TryMatches(exes, pattern, exe, out bool m) && m;
+    // 원래 패턴이 이 exe 에서 쓰일 수 있게 맞는지 (usable: 일치 수 -> 쓰일 수 있는지 — Sigcheck.Usable).
+    // 스캔이 실패하면(시간 초과 — 지나치게 넓은 패턴) 알리고 false
+    private static bool Matches(ExeCache exes, SigPattern pattern, Func<int, bool> usable, string exe) =>
+        TryMatches(exes, pattern, usable, exe, out bool m) && m;
 
-    private static bool TryMatches(ExeCache exes, SigPattern pattern, string exe, out bool matched)
+    private static bool TryMatches(ExeCache exes, SigPattern pattern, Func<int, bool> usable, string exe, out bool matched)
     {
         try
         {
-            matched = pattern.Scan(exes.Target(exe)).Count > 0;
+            matched = usable(pattern.Scan(exes.Target(exe)).Count);
             return true;
         }
         catch (SignatureException ex)
@@ -252,9 +317,10 @@ internal static class SignatureRepair
     }
 
     // 후보 검증. 통과하면 "클라이언트: 곳 수" 요약, 아니면 null.
-    //   원래 패턴(같은 항목)이 아직 맞는 클라이언트: 후보가 정확히 같은 곳들을 가리켜야 한다 — 거기서 다른 곳을
+    //   후보는 모든 클라이언트에서 쓰일 수 있어야 한다 (Sigcheck.Usable — 1곳 이상, deucalion 후크는 정해진 수).
+    //   원래 패턴(같은 항목)이 아직 쓰일 수 있는 클라이언트: 후보가 정확히 같은 곳들을 가리켜야 한다 — 거기서 다른 곳을
     //     가리키면 그 클라이언트를 망가뜨린다 (input 은 모든 클라이언트에 적용됨).
-    //   원래 패턴이 깨진 클라이언트: 1곳 이상, expected 가 있으면 정확히 그 수. 그리고 그런 클라이언트끼리 수가 같아야
+    //   원래 패턴이 깨진 클라이언트: expected 가 있으면 정확히 그 수. 그리고 그런 클라이언트끼리 수가 같아야
     //     한다 — deucalion 은 맞는 곳을 전부 후킹하므로 넓은 패턴은 엉뚱한 함수까지 건드린다.
     private static string? Validate(ExeCache exes, string pattern, List<GameClient> clients, string kind, string? variant, string itemName,
                                     IReadOnlyList<Sigcheck.Row> original, int? expected)
@@ -266,10 +332,13 @@ internal static class SignatureRepair
         {
             if (variant != null && !Sigcheck.Applies(kind, variant, client.Region)) continue;
             var exe = exes.Target(client.ExePath);
-            var got = Sigcheck.Points(sig, exe, kind);
-            if (got.Count == 0) return null;
-            var reference = original.Where(r => r.Item.Name == itemName)
-                .Select(r => Sigcheck.Points(r.Pattern, exe, kind)).FirstOrDefault(p => p.Count > 0);
+            var matches = sig.Scan(exe);
+            // deucalion 후크는 정해진 일치 수여야 걸린다 (가리키는 곳이 맞아도)
+            if (!Sigcheck.Usable(kind, itemName, matches.Count)) return null;
+            var got = matches.Select(m => Sigcheck.TargetOf(m, exe, kind)).ToHashSet();
+            // 기준은 그 클라이언트에서 아직 쓰일 수 있는 원래 패턴 — 개수만 틀린(쓰일 수 없는) 원래 패턴과 같은 곳을 요구하면 맞는 후보가 탈락한다
+            var reference = original.Where(r => r.Item.Name == itemName).Select(r => r.Pattern.Scan(exe))
+                .FirstOrDefault(ms => Sigcheck.Usable(kind, itemName, ms.Count))?.Select(m => Sigcheck.TargetOf(m, exe, kind)).ToHashSet();
             if (reference != null)
             {
                 if (!got.SetEquals(reference)) return null;

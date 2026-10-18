@@ -89,6 +89,9 @@ internal sealed class ActTargetException(ActProblem problem, string message, IRe
 }
 
 // 관리자 권한 확인 창에서 '아니요'
+// 패치 파일에 exe 가 없거나 일부만 있음 (큰 출시 묶음은 exe 가 마지막 조각이 아닌 다른 조각에 있다 — Thaliak.SnapshotExe 가 묶음의 다른 조각을 본다)
+internal sealed class ExeNotInPatchException(string message) : ToolException(message);
+
 internal sealed class ElevationCanceledException() : ToolException("관리자 권한 요청이 취소되어 아무것도 바꾸지 않았습니다.");
 
 // 이 폴더에 쓰려면 관리자 권한으로 다시 실행해야 함
