@@ -54,6 +54,16 @@
         <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
     </Style>
 
+    <!-- 카드 안의 제목 (고급 모드 작업 묶음, 설정 항목 묶음) -->
+    <Style x:Key="CardTitle" TargetType="TextBlock" BasedOn="{StaticResource Headline}">
+        <Setter Property="FontSize" Value="15" />
+    </Style>
+
+    <!-- 설정 칸 이름 (입력칸·스위치 위의 굵은 글자) -->
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
     <Style x:Key="Body" TargetType="TextBlock">
         <Setter Property="FontSize" Value="14" />
         <Setter Property="LineHeight" Value="22" />
@@ -78,5 +88,13 @@
         <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- 고정폭 글자 칸의 테두리 (진행 화면의 자세한 기록, 고급 모드의 현재 상태). 안쪽 여백은 쓰는 곳에서 -->
+    <Style x:Key="MonoPanel" TargetType="Border">
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
     </Style>
 </ResourceDictionary>

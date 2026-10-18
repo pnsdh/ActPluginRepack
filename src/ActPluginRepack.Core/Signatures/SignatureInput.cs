@@ -11,9 +11,9 @@ internal static class SignatureInput
 
     public static string FileFor(string kind) => kind switch
     {
-        "deucalion" => FileName,
-        "memory" => MemoryFile,
-        "oodle" => OodleFile,
+        SignatureKinds.Deucalion => FileName,
+        SignatureKinds.Memory => MemoryFile,
+        SignatureKinds.Oodle => OodleFile,
         _ => throw new ArgumentException(kind),
     };
 
@@ -32,7 +32,7 @@ internal static class SignatureInput
             int bar = line.IndexOf('|');
             if (bar <= 0) throw new ToolException($"{path}:{n}: '이름|패턴' 형식이어야 합니다.");
             string name = line[..bar].Trim(), pattern = line[(bar + 1)..].Trim();
-            try { SigPattern.Parse(pattern); }
+            try { SigLib.Parse(pattern); }
             catch (ToolException ex) { throw new ToolException($"{path}:{n}: {ex.Message}"); }
             // deucalion(pelite)에서 '*' 는 "절대 주소 포인터 따라가기"라 의미가 다르다 — 플러그인/Machina 표기를 붙여 넣은 실수
             if (fileName == FileName && pattern.Contains('*'))

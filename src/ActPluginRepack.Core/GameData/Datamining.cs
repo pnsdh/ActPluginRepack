@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 // 공개 데이터마이닝 저장소에서 CSV 받기 (SharpVision 이 없을 때, 그리고 클라이언트가 없는 cn/tc).
 //
 //   en/de/fr/ja  xivapi/ffxiv-datamining         csv/<lang>/  xiv-data-oxidizer 형식 (SharpVision 과 바이트 동일)
@@ -36,16 +34,12 @@ internal static class Datamining
     // (확인과 받기 사이에 새 커밋이 올라오거나 raw CDN 이 파일마다 다른 때의 것을 주어 옛/새 CSV 가 섞이지 않게)
     public sealed record Status(string Description, bool Usable, string? Sha = null);
 
-    // Check 로 확인한 커밋 (Download 에 sha 를 넘기지 않았을 때 쓴다)
-    private static readonly Dictionary<Source, string> Checked = [];
-
     // gameVersion 이 null 이면(클라이언트 없음) 최신본을 그대로 쓴다.
     public static Status Check(Source src, string? gameVersion)
     {
         var commits = GitHub.RecentCommits(src.Repo, src.Branch, src.Prefix.Length > 0 ? src.Prefix.TrimEnd('/') : null, 10);
         if (commits.Count == 0) return new Status($"{src.Repo} {src.Prefix} - 없음", false);
         string sha = commits[0].Sha;
-        lock (Checked) Checked[src] = sha;
         var (message, date) = commits.Select(c => (c.Message, c.Date)).FirstOrDefault(c => HasVersion(c.Message) || Retail(c.Message) != null);
         if (message == null) (message, date) = (commits[0].Message, commits[0].Date);
         string what = $"{src.Repo} \"{message}\" ({date:yyyy-MM-dd})";
@@ -61,11 +55,21 @@ internal static class Datamining
                 ? Result($"{retail} = {gameVersion}, 버전 일치", true)
                 : Result($"{retail} = {mapped}, 다른 버전", false);
 
-        var build = DateTime.ParseExact(gameVersion[..10], "yyyy.MM.dd", null, System.Globalization.DateTimeStyles.AssumeUniversal)
+        // 버전 문자열의 날짜는 빌드 날짜라 출시보다 며칠 이르다 — 그 사이의 커밋(직전 패치의 갱신)을 이번 것으로 보지 않게
+        // 공식 패치 서버가 이 버전을 처음 내려준 시각과 비교한다 (모르면 빌드 날짜)
+        DateTime? released = null;
+        try { released = Thaliak.FirstReleasedAt(Region.All.Where(Thaliak.Supports), gameVersion); }
+        catch (Exception ex) when (Errors.Recoverable(ex)) { Log.Note($"[csv] 출시 시각을 확인하지 못해 빌드 날짜로 비교 - {Errors.Describe(ex)}"); }
+        if (released is { } at)
+            return date >= at
+                ? Result($"커밋이 출시({at.ToLocalTime():yyyy-MM-dd HH:mm}) 이후라 이번 패치로 추정", true)
+                : Result($"출시({at.ToLocalTime():yyyy-MM-dd HH:mm}) 이전 커밋, 아직 미갱신", false);
+        string buildDate = GameVersion.DatePart(gameVersion) ?? gameVersion;
+        var build = DateTime.ParseExact(buildDate, "yyyy.MM.dd", null, System.Globalization.DateTimeStyles.AssumeUniversal)
             .ToUniversalTime();
         return date >= build
-            ? Result($"커밋이 빌드 날짜({gameVersion[..10]}) 이후라 이번 패치로 추정", true)
-            : Result($"빌드 날짜({gameVersion[..10]}) 이전 커밋, 아직 미갱신", false);
+            ? Result($"커밋이 빌드 날짜({buildDate}) 이후라 이번 패치로 추정", true)
+            : Result($"빌드 날짜({buildDate}) 이전 커밋, 아직 미갱신", false);
     }
 
     private static bool HasVersion(string message) =>
@@ -81,16 +85,15 @@ internal static class Datamining
     }
 
     // 전부 받은 뒤에만 바꿔 넣는다 — 중간에 실패하면 두 버전이 섞인 폴더가 남지 않게.
-    // sha: 확인한 커밋 (Status.Sha). 주지 않으면 이 출처를 마지막으로 Check 한 커밋, 그것도 없으면 브랜치 최신.
-    public static void Download(Source src, IEnumerable<string> sheets, string dstDir, string? sha = null)
+    // sha: 확인한 커밋 (Status.Sha — 없으면 브랜치 최신)
+    public static void Download(Source src, IEnumerable<string> sheets, string dstDir, string? sha)
     {
-        if (sha == null) lock (Checked) sha = Checked.GetValueOrDefault(src);
         string rev = sha ?? src.Branch;
         var files = new List<(string Name, byte[] Bytes)>();
         foreach (string sheet in sheets)
         {
             string url = $"https://raw.githubusercontent.com/{src.Repo}/{rev}/{src.Prefix}{sheet}.csv";
-            files.Add((sheet + ".csv", Http.GetBytesOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}")));
+            files.Add((sheet + ".csv", Http.GetBytes(url)));
         }
         foreach (var (name, bytes) in files) Files.WriteAtomic(Path.Combine(dstDir, name), bytes);
     }

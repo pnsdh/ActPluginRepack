@@ -1,4 +1,4 @@
-# 재료 직접 넣기
+# 데이터 직접 넣기
 
 `prepare` 없이 재료를 직접 넣어도 된다. 원본 `FFXIV_ACT_Plugin.dll`
 ([공식 릴리스](https://github.com/ravahn/FFXIV_ACT_Plugin/releases))과 동봉 DLL 을 `input\plugin\` 에 넣고, 바꿀 것만
@@ -23,7 +23,8 @@ FFXIV_ACT_Plugin.dll
 
 ## opcode — `input\opcodes\`
 
-- 파일: `Global.txt` / `Korean.txt` / `Chinese.txt` / `TraditionalChinese.txt` — 그 외 이름은 무시.
+- 파일: `Global.txt` / `Korean.txt` / `Chinese.txt` / `TraditionalChinese.txt`. 폴더의 `*.txt` 는 모두 넣으려 하므로 다른 이름의
+  `.txt` 를 두면 빌드가 멈춘다(플러그인에 그 리소스가 없음) — 메모는 다른 확장자로.
 - 형식: 각 줄 `이름|16진수`. `export --what opcodes` 로 지금 내장값을 뽑아 시작점으로 쓸 수 있다.
 - 구하는 곳: `prepare`([opcode](HowItWorks.md#opcode)), [ACT_FFXIV 디스코드](https://discord.gg/9tHJ7s2P3r)의
   [#contribute-logfiles](https://discord.com/channels/551474815727304704/551527590800654386) 제보,
@@ -78,6 +79,10 @@ FFXIV_ACT_Plugin.dll
 | `deucalion` | 동봉 deucalion(`deucalion-*.distrib.dll`)의 패킷 후크 `Recv` / `Send` / `SendLobby` / `CreateTarget.*` | 패킷이 하나도 안 들어옴 — **치명**(exit 2) | `deucalion.txt` |
 | `memory` | 플러그인의 메모리 읽기 7종(`ChatLog`, `MobArray`, `PartyList` …), `Global` / `TraditionalChinese` | 해당 정보만 못 읽음 — 경고 | `memory.txt` |
 | `oodle` | Machina 의 Oodle 함수 12종(`Global` / `Korean`) | deucalion 캡처에는 안 쓰임 — 경고 | `oodle.txt` |
+
+공식 플러그인 폴더에 deucalion 배포본(`deucalion*.distrib.dll`)이 여러 개 있으면, 같은 폴더 플러그인의 Machina 가 검사하는
+`_checksum`(SHA256)과 짝인 하나를 쓴다(`Deucalion.FindDistrib`) — 공식 3.0.2.3 zip 에는 대만판용 1.2.1 과 다른 서버용 1.5.0 이
+같이 들어 있었다. 짝인 것이 없거나 둘 이상이면 하나만 두라고 알리고 멈춘다.
 
 `config.json` 의 각 클라이언트에서 시그니처별 일치 개수를 보여 주고 항목별로 `OK` / `BROKEN` 을 판정한다.
 `oodle.*_Train` 2개는 공식 플러그인에서도 오래전부터 0건이라 늘 경고로 나온다(무시해도 됨).

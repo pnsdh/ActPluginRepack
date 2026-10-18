@@ -23,7 +23,7 @@ internal static class GameVersions
     private static readonly Lock Gate = new();
     private static List<Entry>? _all;
     private static DateTime _fetchedAt, _failedAt, _missRefreshAt;
-    private static int _epoch;
+    private static readonly EpochWatch RunEpoch = new();
     private static Exception? _lastFailure;
 
     // 이번 작업(ConnectionEpoch)에서 표를 받지 못한 까닭 (그 뒤에 받았거나 새 작업이면 null). 표에 없어 못 찾은 것이
@@ -49,9 +49,7 @@ internal static class GameVersions
     // 새 작업이 시작됐으면 실패·다시 받기 기억을 잊는다 (Gate 안에서)
     private static void ForgetIfNewRun()
     {
-        int epoch = Http.ConnectionEpoch;
-        if (epoch == _epoch) return;
-        _epoch = epoch;
+        if (!RunEpoch.Changed()) return;
         _failedAt = _missRefreshAt = default;
         _lastFailure = null;
     }
@@ -67,7 +65,7 @@ internal static class GameVersions
             if (now - _failedAt < RetryAfterFailure) return _all ?? [];
             try
             {
-                string json = Http.GetStringOrNull(Url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {Url}");
+                string json = Http.GetString(Url);
                 using var doc = JsonDocument.Parse(json);
                 var list = doc.RootElement.EnumerateArray()
                     .Select(e => new Entry(

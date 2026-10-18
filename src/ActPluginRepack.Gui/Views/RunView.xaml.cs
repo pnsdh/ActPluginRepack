@@ -13,7 +13,7 @@ public partial class RunView
     public RunView()
     {
         InitializeComponent();
-        // WPF 는 연달아 보이는 진행 화면(설치 뒤 [설치 전으로 되돌리기] 등)에 이 화면을 다시 쓴다 ->
+        // WPF 는 연달아 보이는 진행 화면(설치 뒤 [공식 플러그인으로 되돌리기] 등)에 이 화면을 다시 쓴다 ->
         // 이전 모델의 이벤트를 떼고(옛 기록이 새 화면을 스크롤하지 않게) 맨 위부터 보인다
         DataContextChanged += (_, e) =>
         {

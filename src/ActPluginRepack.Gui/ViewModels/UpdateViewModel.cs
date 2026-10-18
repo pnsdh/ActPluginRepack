@@ -42,11 +42,37 @@ internal sealed partial class UpdateViewModel : ObservableObject
         }
     }
 
+    // 새 버전이 실제로 시작했다는 신호. 이전 버전은 새 버전을 띄운 뒤 이 신호를 기다리고, 신호 없이 끝나거나(런타임이 맞지 않음 등)
+    // 오래 걸리면 원래 파일로 되돌린 채 계속 쓴다 — 고장 난 새 버전만 남지 않게.
+    internal static string StartedEventName(int oldPid) => $@"Local\ActPluginRepack.Gui.Started.{oldPid}";
+
+    internal static void SignalStarted(int oldPid)
+    {
+        if (System.Threading.EventWaitHandle.TryOpenExisting(StartedEventName(oldPid), out var h))
+            using (h) h.Set();
+    }
+
+    // 새 버전이 시작 신호를 보냈으면 true. 신호 없이 끝났거나(런타임이 맞지 않음 등) 너무 오래 걸리면(런타임 설치 안내 창에서
+    // 멈춤 등) 그 프로세스를 끝내고 false — 원래 파일로 되돌린다
+    private static bool WaitStarted(System.Diagnostics.Process next, System.Threading.EventWaitHandle started)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (started.WaitOne(200)) return true;
+            if (next.HasExited) return started.WaitOne(0);
+        }
+        try { next.Kill(entireProcessTree: true); next.WaitForExit(5000); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException or NotSupportedException) { }
+        return false;
+    }
+
     [RelayCommand]
     private void OpenRelease()
     {
         string url = _update?.Url ?? AppInfo.ReleasesUrl;
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        // 직접 받기가 마지막 길이다 — 브라우저를 열지 못하면 주소라도 보이게
+        if (!Shell.Open(url)) Notice = $"브라우저를 열지 못했습니다. 이 주소를 직접 여세요: {url}";
     }
 
     // 원터치: 받기 -> 확인 -> 바꿔 넣기 -> 새 버전 실행 -> 끝내기. 실패하면 아무것도 바꾸지 않고(또는 되돌리고) 직접 받기를 안내.
@@ -71,11 +97,18 @@ internal sealed partial class UpdateViewModel : ObservableObject
             // 설치 도중에 끊길 수 있다) -> 아래에서 원래 파일로 되돌린다
             if (Navigator.Main.JobRunning)
                 throw new ToolException("작업이 진행 중이라 업데이트를 마치지 못했습니다. 작업이 끝난 뒤 다시 누르세요.");
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(appDir, AppUpdate.GuiExe))
+            // 새 버전이 실제로 시작하는지 본다 (신호를 먼저 만들어 둬야 놓치지 않는다)
+            using var started = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset,
+                                                                     StartedEventName(Environment.ProcessId));
+            using var next = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(appDir, AppUpdate.GuiExe))
             {
                 UseShellExecute = false,
                 ArgumentList = { "--wait-pid", Environment.ProcessId.ToString(), "--updated-from", AppInfo.DisplayVersion },
-            });
+            }) ?? throw new ToolException("새 버전을 실행하지 못했습니다.");
+            Notice = "새 버전을 시작하는 중...";
+            if (!await Task.Run(() => WaitStarted(next, started)))
+                throw new ToolException("새 버전이 제대로 시작하지 않아 원래 버전으로 되돌렸습니다. " +
+                                        "필요한 .NET 데스크톱 런타임이 없을 수 있습니다. [직접 받기]의 안내를 확인하세요.");
             // 창 닫기 막음(업데이트 중에는 닫지 못함)에 걸리지 않게 먼저 내린다
             restarting = true;
             Updating = false;
@@ -83,9 +116,13 @@ internal sealed partial class UpdateViewModel : ObservableObject
         }
         catch (Exception ex) when (Errors.Recoverable(ex))
         {
-            if (applied) AppUpdate.Revert(appDir); // 바꿔 넣었는데 실행하지 못함 (백신 등) -> 원래 파일로
+            // 바꿔 넣었는데 실행하지 못함 (백신, 새 버전이 시작하지 않음 등) -> 원래 파일로
+            bool reverted = !applied || AppUpdate.Revert(appDir) != AppUpdate.RevertResult.Partial;
             Errors.WriteLog(ex, "update");
-            Notice = "자동 업데이트를 하지 못했습니다. 지금 버전은 그대로입니다. 다시 시도하거나 [직접 받기]로 받으세요.";
+            Notice = reverted
+                ? "자동 업데이트를 하지 못했습니다. 지금 버전은 그대로입니다. 다시 시도하거나 [직접 받기]로 받으세요."
+                : "자동 업데이트를 하지 못했고, 원래 파일로 다 되돌리지 못했습니다. 이 프로그램을 다시 시작하면 마저 되돌립니다. " +
+                  "그래도 안 되면 [직접 받기]로 받아 새로 푸세요.";
             NoticeDetail = Errors.Describe(ex);
             Failed = true;
             Updating = false;

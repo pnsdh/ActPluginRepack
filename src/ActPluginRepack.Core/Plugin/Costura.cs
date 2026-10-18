@@ -14,6 +14,14 @@ internal static class Costura
     public static EmbeddedResource? Find(ModuleDefinition module, string name) =>
         module.Resources.OfType<EmbeddedResource>().FirstOrDefault(r => r.Name == name);
 
+    // 리소스를 같은 자리에서 바꾼다 (순서 유지 — 플러그인이 리소스 순서대로 읽는 것이 있다: override 파일은 나중 것이 이긴다)
+    public static void ReplaceInPlace(ModuleDefinition module, Resource existing, Resource replacement)
+    {
+        int i = module.Resources.IndexOf(existing);
+        if (i < 0) throw new InvalidOperationException($"리소스가 없습니다: {existing.Name}");
+        module.Resources[i] = replacement;
+    }
+
     // 바깥 플러그인에서 안쪽 어셈블리를 풀어 읽기 전용으로 연다.
     public static ModuleDefinition ReadInner(ModuleDefinition plugin, string name)
     {

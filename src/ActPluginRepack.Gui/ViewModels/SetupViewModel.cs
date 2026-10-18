@@ -69,7 +69,7 @@ internal sealed partial class SetupViewModel : ObservableObject
 
         try
         {
-            var act = Install.ResolveTarget(null);
+            var act = ActLocator.ResolveTarget(null);
             ActFound = true;
             ActStatus = $"ACT 의 FFXIV 플러그인을 찾았습니다: {string.Join(", ", act.PluginDirs)}";
         }
@@ -78,20 +78,8 @@ internal sealed partial class SetupViewModel : ObservableObject
         {
             ActFound = false;
             var target = ex as ActTargetException;
-            ActStatus = target?.Problem switch
-            {
-                ActProblem.NotRegistered =>
-                    "ACT 의 FFXIV 플러그인을 찾지 못했습니다. 해루봇이나 ACT 에서 FFXIV 플러그인을 먼저 설치하세요. (나중에 해도 됩니다)",
-                ActProblem.MultipleEnabled =>
-                    $"ACT 에 FFXIV 플러그인이 여러 개 켜져 있습니다. ACT 의 Plugins 탭에서 쓰지 않는 것을 끄세요. (나중에 해도 됩니다)\n{Friendly.EnabledPlugins(target.Paths)}",
-                // 원문(XML 오류)은 고급 모드의 상태와 명령줄에만
-                ActProblem.ChineseOnly =>
-                    "해루봇의 중국 서버용 FFXIV 플러그인만 있습니다. 이 프로그램은 한국·글로벌 서버용(공식) 플러그인만 고칩니다. (나중에 해도 됩니다)",
-                ActProblem.ConfigUnreadable =>
-                    "ACT 설정 파일을 읽지 못했습니다. ACT 를 한 번 실행했다가 끈 뒤 다시 하세요. (나중에 해도 됩니다)",
-                _ => $"ACT 의 FFXIV 플러그인을 확인하지 못했습니다: {Errors.Describe(ex)}\n" +
-                     "해루봇이나 ACT 에서 FFXIV 플러그인을 다시 설치하세요. (나중에 해도 됩니다)",
-            };
+            var (title, text) = Friendly.ActProblemText(target?.Problem, target?.Message ?? Errors.Describe(ex), target?.Paths);
+            ActStatus = $"{title}. {text}\n(나중에 해도 됩니다)"; // text 가 괄호로 끝나기도 해서 줄을 나눈다
         }
     }
 
@@ -146,9 +134,9 @@ internal sealed partial class SetupViewModel : ObservableObject
             kept = Config.MoveBroken(root);
             Config.SetClients(root, chosen.ToDictionary(c => c.Region!.Name, c => c.InstallDir));
         }
-        catch (Exception ex) when (ex is ToolException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (Errors.IsToolOrFileError(ex))
         {
-            Error = $"저장하지 못했습니다: {(ex is ToolException ? ex.Message : Errors.Describe(ex))}\n" +
+            Error = $"저장하지 못했습니다: {Errors.Describe(ex)}\n" +
                     $"(설정 파일: {AppState.Workspace.ConfigPath})";
             return;
         }
@@ -162,5 +150,5 @@ internal sealed partial class SetupViewModel : ObservableObject
 
     private bool Listed(string dir) => Clients.Any(r => SameDir(r.InstallDir, dir));
     private static string InstallDirOf(string exe) => Path.GetDirectoryName(Path.GetDirectoryName(exe)!)!;
-    private static bool SameDir(string a, string b) => string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+    private static bool SameDir(string a, string b) => Files.SamePath(a, b);
 }

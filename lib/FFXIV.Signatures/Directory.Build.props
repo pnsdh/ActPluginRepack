@@ -1,0 +1,13 @@
+<Project>
+  <!-- FFXIV.Signatures 와 그 시험 프로젝트 공통. 이 파일이 있어 저장소 루트의 Directory.Build.props(앱 버전 등)를
+       물려받지 않는다 — 이 폴더를 그대로 떼어 다른 저장소로 옮겨도 똑같이 빌드되게. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Authors>pnsdh</Authors>
+    <Copyright>pnsdh</Copyright>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

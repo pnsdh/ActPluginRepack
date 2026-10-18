@@ -1,3 +1,8 @@
+// 예외 규칙
+// - IOException 등 흔한 예외는 감싸지 않고 그대로 올린다. 사용자 말로 바꾸는 것은 Errors.Describe 가 한다.
+// - 감싸서 던지는 곳은 '아무것도 바꾸지 않았다' / '되돌렸다'를 약속해야 하는 곳뿐이다 (설치, 되돌리기 등).
+// - 받은 자료의 형식이 예상과 다르면 "형식이 예상과 다릅니다" 로 감싼다.
+
 // 사용자가 고칠 수 있는(또는 알아야 하는) 실패. 메시지는 그대로 사용자에게 보인다.
 // 화면(GUI)이 종류별로 다르게 안내할 수 있도록 흔한 경우는 하위 형식으로 나눈다.
 internal class ToolException(string message) : Exception(message);
@@ -50,6 +55,20 @@ internal sealed class AppsRunningException(IReadOnlyList<string> apps)
     public IReadOnlyList<string> Apps { get; } = apps;
 }
 
+// ACT 에 이 도구가 받은 공식 플러그인보다 새 플러그인이 있어 그대로 둠 (해루봇의 한국 임시본 등) — 실패가 아니라 할 일이 없음
+internal sealed class NewerPluginInstalledException : ToolException
+{
+    public NewerPluginInstalledException(string installed, string ours)
+        : base($"ACT 에 더 새 플러그인({installed})이 설치되어 있어, 공식 플러그인 {ours} 버전(또는 그것으로 만든 패치본)으로 덮어쓰지 않습니다. " +
+               "공식 플러그인이 갱신된 뒤 다시 실행하세요.") => (Installed, Ours) = (installed, ours);
+
+    // 관리자 권한으로 실행한 쪽에서 났을 때 (버전은 그쪽이 남긴 문장에만 있다)
+    public NewerPluginInstalledException(string message) : base(message) { }
+
+    public string? Installed { get; }
+    public string? Ours { get; }
+}
+
 // 설정된 게임 클라이언트가 모두 최신 버전이 아님 (런처로 업데이트해야 함 — 로그인이 필요해 자동으로 못 한다)
 internal sealed class GameOutdatedException(IReadOnlyList<OutdatedClient> clients)
     : ToolException("게임 클라이언트가 최신 버전이 아닙니다: " +
@@ -72,52 +91,13 @@ internal sealed class ActTargetException(ActProblem problem, string message, IRe
 // 관리자 권한 확인 창에서 '아니요'
 internal sealed class ElevationCanceledException() : ToolException("관리자 권한 요청이 취소되어 아무것도 바꾸지 않았습니다.");
 
-internal static class Errors
+// 이 폴더에 쓰려면 관리자 권한으로 다시 실행해야 함
+internal sealed class ElevationRequiredException(string dir)
+    : Exception($"{dir} 에 쓰려면 관리자 권한이 필요합니다 (ACT 가 Program Files 안에 있는 경우)")
 {
-    // 한 단계의 실패로 처리할 예외 — 이 밖의 것은 버그이므로 그대로 올린다
-    public static bool Recoverable(Exception ex) =>
-        ex is ToolException or IOException or UnauthorizedAccessException or HttpRequestException or InvalidDataException
-            or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or FormatException
-            or System.ComponentModel.Win32Exception or BadImageFormatException or System.Xml.XmlException;
-
-    // 받은 자료의 형식이 예상과 다를 때 나는 예외 (버그일 수도 있다)
-    public static bool IsDataFormat(Exception ex) =>
-        ex is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or FormatException;
-
-    // 여러 출처를 받다 난 실패 중 사용자에게 알릴 것 (막힘 > 한도 소진 > 연결 실패 > 서버 오류·거절). 받지 못한 것이 아니면 null
-    public static Exception? DownloadFailure(IEnumerable<Exception> failures)
-    {
-        var list = failures.ToList();
-        return list.OfType<ThrottledException>().FirstOrDefault() ??
-               list.OfType<GitHubLimitException>().FirstOrDefault() ??
-               list.OfType<NetworkException>().OrderBy(n => n.Kind == NetworkFailure.Connection ? 0 : 1).FirstOrDefault() as Exception;
-    }
-
-    // 흔한 예외를 사용자 말로
-    public static string Describe(Exception ex) => ex switch
-    {
-        ToolException => ex.Message,
-        OperationCanceledException => "작업을 취소했습니다.",
-        UnauthorizedAccessException => $"파일이나 폴더에 접근할 수 없습니다. 다른 프로그램(ACT 등)이 쓰고 있거나 권한이 없을 수 있습니다. ({ex.Message})",
-        FileNotFoundException f => $"파일이 없습니다: {f.FileName ?? ex.Message}",
-        DirectoryNotFoundException => $"폴더를 찾지 못했습니다. ({ex.Message})",
-        IOException => $"파일을 읽거나 쓰지 못했습니다. 다른 프로그램(ACT, 백신 등)이 쓰고 있을 수 있습니다. ({ex.Message})",
-        BadImageFormatException => $"올바른 DLL/EXE 파일이 아닙니다. ({ex.Message})",
-        _ when IsDataFormat(ex)
-            => $"받은 데이터의 형식이 예상과 다릅니다. 원본 저장소의 형식이 바뀌었을 수 있습니다. ({ex.Message})",
-        System.ComponentModel.Win32Exception => $"외부 프로그램을 실행하지 못했습니다. 설치되어 있는지, 경로가 맞는지 확인하세요. ({ex.Message})",
-        _ => $"예상하지 못한 오류가 생겼습니다. ({ex.GetType().Name}: {ex.Message})",
-    };
-
-    // 예상 못 한 예외의 전체 내용을 남길 곳
-    public static string LogPath => Path.Combine(Path.GetTempPath(), "ActPluginRepack-error.log");
-
-    public static void WriteLog(Exception ex, string context) => WriteLog(ex.ToString(), context);
-
-    // detail: 예외 전체 내용 (관리자 쪽에서 넘겨받은 것 등)
-    public static void WriteLog(string detail, string context)
-    {
-        try { File.WriteAllText(LogPath, $"{DateTime.Now:O}\n{context}\n\n{detail}"); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-    }
+    public string Directory { get; } = dir;
 }
+
+// 같은 작업 폴더에서 다른 작업(다른 창, 명령줄)이 이미 실행 중
+internal sealed class WorkspaceBusyException(string root)
+    : ToolException($"이 작업 폴더({root})에서 다른 작업이 이미 실행 중입니다. 그 작업이 끝난 뒤에 다시 실행하세요.");

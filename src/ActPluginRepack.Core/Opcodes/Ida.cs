@@ -11,6 +11,15 @@ internal static class Ida
 {
     private const string YarukonRaw = "https://raw.githubusercontent.com/Yarukon/FFXIVNetworkOpcodes/master";
     private static readonly string[] YarukonFiles = ["ffxiv_opcode_finder.py", "signatures.json", "machina.template"];
+    // 우리 래퍼가 있는 ida\ 폴더: 실행 파일 옆 (GUI, 개발 빌드), 아니면 한 단계 위 (배포본의 cli\ActPluginRepack.exe)
+    private static string OurDir()
+    {
+        string here = Path.Combine(AppContext.BaseDirectory, "ida");
+        string up = Path.Combine(AppContext.BaseDirectory, "..", "ida");
+        return OurFiles.All(f => File.Exists(Path.Combine(here, f))) || !OurFiles.All(f => File.Exists(Path.Combine(up, f)))
+            ? here : Path.GetFullPath(up);
+    }
+
     private static readonly string[] OurFiles = ["run_finder.py", "signatures.override.json"];
     private const string CacheName = "opcodes.json";
 
@@ -43,7 +52,7 @@ internal static class Ida
                 .OrderByDescending(x => x.Version).ThenBy(x => x.Dir, StringComparer.OrdinalIgnoreCase)
                 .Select(x => x.Dir).FirstOrDefault();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (Errors.IsFileError(ex))
         {
             return null;
         }
@@ -58,16 +67,35 @@ internal static class Ida
     {
         string cache = Path.Combine(workDir, CacheName);
         string source = $"IDA {region.Name}";
-        if (!overwrite && File.Exists(cache))
-        {
-            Log.Note($@"[opcode] IDA 결과 캐시 사용: {cache}");
-            return new OpcodeSet(source, OpcodeSources.ParseIpcJson(File.ReadAllText(cache), cache, aliases: null));
-        }
+        string ours = OurDir();
+        // finder 는 저장소 최신본을 쓴다 — 패치 날 고쳐지면 다시 돌리게 finder·래퍼의 해시를 비교한다 (받지 못하면 받아 둔 결과).
+        // 해시를 남기기 전에 만든 결과는 분석이 몇 분 걸리므로 그때 것과 같다고 보고 지금 해시를 남긴다 (trustUnstamped).
+        // 새로 돌리는 것은 옆 폴더에서 — 끝까지 성공해야 받아 둔 결과를 바꾼다
+        return ScriptCache.Run(workDir, cache, overwrite, trustUnstamped: true,
+            fetch: Fetch,
+            hash: finder => Files.Sha256Hex(
+                finder.OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => System.Text.Encoding.UTF8.GetBytes(kv.Value))
+                    .Concat(OurFiles.SelectMany(f => File.ReadAllBytes(Path.Combine(ours, f)))).ToArray()),
+            readCache: () => new OpcodeSet(source, OpcodeSources.ParseIpcJson(File.ReadAllText(cache), cache, aliases: null)),
+            fresh: (finder, hash) => Analyze(idat, workDir, exePath, region, finder, ours, hash, source),
+            new ScriptCache.Notes(
+                FetchFailed: why => $"[opcode] Yarukon finder 를 받지 못해 ({why}) 받아 둔 IDA 결과 사용: {cache}",
+                Cached: $@"[opcode] IDA 결과 캐시 사용: {cache}",
+                Changed: "[opcode] Yarukon finder 가 바뀌어 IDA 로 다시 분석",
+                RunFailed: why => $"[opcode] 바뀐 finder 로 IDA 를 다시 돌리지 못해 받아 둔 결과를 씀 - {why}"));
+    }
 
-        if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
-        Directory.CreateDirectory(workDir);
-        Download(workDir);
-        string ours = Path.Combine(AppContext.BaseDirectory, "ida");
+    private static OpcodeSet Analyze(string idat, string dest, string exePath, Region region, Dictionary<string, string> finder,
+                                     string ours, string hash, string source)
+    {
+        string workDir = ScriptCache.NewDir(dest);
+        foreach (var (f, text) in finder)
+        {
+            // finder 는 래퍼가 UTF-8 로 읽고, signatures.json 은 래퍼가 ASCII 로 다시 쓴다
+            File.WriteAllText(Path.Combine(workDir, f), text, new System.Text.UTF8Encoding(false));
+            // 저장소 최신본을 그대로 실행하므로 어느 것을 실행했는지 남긴다 (문제가 생겼을 때 추적용)
+            Log.Note($"[opcode] {f} (Yarukon master) sha256 {Files.Sha256Hex(System.Text.Encoding.UTF8.GetBytes(text))[..16]}");
+        }
         foreach (string f in OurFiles) File.Copy(Path.Combine(ours, f), Path.Combine(workDir, f));
         string exe = Path.Combine(workDir, "ffxiv_dx11.exe");
         File.Copy(exePath, exe);
@@ -99,21 +127,22 @@ internal static class Ida
             : null;
         if (result == null)
             throw new ToolException($@"IDA 분석 결과에 opcodes.json 이 없습니다. {Path.Combine(workDir, "ida.log")} 를 확인하세요.");
-        File.Copy(result, cache, overwrite: true);
+        File.Copy(result, Path.Combine(workDir, CacheName), overwrite: true);
+        Files.WriteAtomic(Path.Combine(workDir, ScriptCache.StampFile), hash);
         Log.Note($"[opcode] IDA 완료 ({sw.Elapsed:m\\:ss})");
+        // 다 됐으면 받아 둔 결과와 바꾼다 (분석을 다시 하지 않게, 바꾸지 못하면 이번 결과만)
+        string cache = ScriptCache.Commit(workDir, dest, CacheName, "IDA");
         return new OpcodeSet(source, OpcodeSources.ParseIpcJson(File.ReadAllText(cache), cache, aliases: null));
     }
 
-    private static void Download(string dir)
+    private static Dictionary<string, string> Fetch()
     {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (string f in YarukonFiles)
         {
             string url = $"{YarukonRaw}/{f}";
-            string text = Http.GetStringOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
-            // finder 는 래퍼가 UTF-8 로 읽고, signatures.json 은 래퍼가 ASCII 로 다시 쓴다
-            File.WriteAllText(Path.Combine(dir, f), text, new System.Text.UTF8Encoding(false));
-            // 저장소 최신본을 그대로 실행하므로 어느 것을 실행했는지 남긴다 (문제가 생겼을 때 추적용)
-            Log.Note($"[opcode] {f} (Yarukon master) sha256 {Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)))[..16]}");
+            result[f] = Http.GetString(url);
         }
+        return result;
     }
 }

@@ -18,8 +18,8 @@ internal static class Sigcheck
     // Variant: deucalion 은 "*", memory 는 Global/TraditionalChinese, oodle 은 Global/Korean
     public sealed record Item(string Kind, string Variant, string Name)
     {
-        public string Group => Kind == "deucalion" ? Name.Split('.')[0] : $"{Kind} {Variant}.{Name}";
-        public bool Critical => Kind == "deucalion";
+        public string Group => Kind == SignatureKinds.Deucalion ? Name.Split('.')[0] : $"{Kind} {Variant}.{Name}";
+        public bool Critical => Kind == SignatureKinds.Deucalion;
     }
 
     public sealed record Row(Item Item, string Source, SigPattern Pattern);
@@ -35,7 +35,7 @@ internal static class Sigcheck
         public bool OfficialHooksOk => OfficialBroken.All(i => !i.Critical);
 
         // 공식 메모리 시그니처는 깨졌지만 교체 시그니처로 맞는 항목이 있음 (패치하면 그 기능이 살아남)
-        public bool MemoryFixedByInput => OfficialBroken.Any(i => i.Kind == "memory" && Broken.All(b => b.Group != i.Group));
+        public bool MemoryFixedByInput => OfficialBroken.Any(i => i.Kind == SignatureKinds.Memory && Broken.All(b => b.Group != i.Group));
     }
 
     public static Result Execute(string pluginPath, string sigDir, List<GameClient> clients)
@@ -55,7 +55,7 @@ internal static class Sigcheck
         // 그룹 단위: 원래 시그니처 중 하나라도 맞으면 그 그룹은 공식본으로 됨 (CreateTarget 후보, Recv 내장/런타임)
         var officialBrokenGroups = officialBroken.Select(i => i.Group).ToHashSet();
         // 이번에 실제로 점검한 변형만 (점검하지 않은 변형 — 그 변형을 쓰는 클라이언트가 없거나 제외됨 — 은 따라잡았는지 모른다)
-        var obsolete = rows.Where(r => r.Source == "input" && clients.Any(c => Applies(r.Item, c.Region)) &&
+        var obsolete = rows.Where(r => r.Source == SignatureSources.Input && clients.Any(c => Applies(r.Item, c.Region)) &&
                                        !officialBrokenGroups.Contains(r.Item.Group))
             .Select(r => r.Item).Distinct().ToList();
         Log.Info();
@@ -67,14 +67,24 @@ internal static class Sigcheck
         return new Result(criticalOk, broken, officialBroken.ToList(), obsolete);
     }
 
+    // 일치 하나가 가리키는 곳 (자동 복구의 후보 검증, replay 의 후크 비교가 같은 규칙으로): call 형은 따라간 대상
+    // (deucalion 은 가장 깊은 북마크를 쓴다), memory/oodle 은 패턴 끝(플러그인이 그 바로 뒤를 읽음), deucalion 의 나머지는
+    // 시작 위치(거기를 후킹)
+    public static int PointOf(SigPattern.Match m, string kind) =>
+        m.Saves.Count > 0 ? m.Saves[^1] : kind == SignatureKinds.Deucalion ? m.Rva : m.End;
+
+    // 패턴이 exe 에서 가리키는 곳들
+    public static HashSet<int> Points(SigPattern sig, ScanTarget exe, string kind) =>
+        sig.Scan(exe).Select(m => PointOf(m, kind)).ToHashSet();
+
     private static bool Applies(Item item, Region? region) => Applies(item.Kind, item.Variant, region);
 
     // 이 지역 클라이언트가 그 시그니처를 쓰는지: memory/oodle 은 지역이 쓰는 변형만, deucalion 은 모두
     // (build 의 교체 시그니처 검증, 자동 복구의 후보 검증도 이것으로 고른다)
     public static bool Applies(string kind, string variant, Region? region) => kind switch
     {
-        "memory" => variant == PluginSignatures.MemoryVariantFor(region),
-        "oodle" => variant == PluginSignatures.OodleVariantFor(region),
+        SignatureKinds.Memory => variant == PluginSignatures.MemoryVariantFor(region),
+        SignatureKinds.Oodle => variant == PluginSignatures.OodleVariantFor(region),
         _ => true,
     };
 
@@ -85,18 +95,18 @@ internal static class Sigcheck
         byte[]? deucalion = distrib != null ? File.ReadAllBytes(distrib) : null;
         if (deucalion != null)
             rows.AddRange(Deucalion.ReadSignatures(deucalion)
-                .Select(s => new Row(new Item("deucalion", "*", s.Name), "deucalion", SigPattern.Parse(s.Pattern))));
+                .Select(s => new Row(new Item(SignatureKinds.Deucalion, "*", s.Name), SignatureSources.Deucalion, SigLib.Parse(s.Pattern))));
         else Log.Note(@"[deucalion] input\plugin 에 deucalion*.distrib.dll 없음 - deucalion 시그니처 생략");
 
         if (File.Exists(pluginPath))
         {
-            using var plugin = ModuleDefinition.ReadModule(pluginPath);
+            using var plugin = Repacker.ReadPlugin(pluginPath);
             using (var machina = Costura.ReadInner(plugin, Costura.Machina))
             {
                 string? expected = DeucalionMachina.ReadChecksum(machina);
                 if (deucalion != null)
                 {
-                    bool match = expected == DeucalionMachina.FormatChecksum(Deucalion.Sha256(deucalion));
+                    bool match = DeucalionMachina.Matches(expected, deucalion);
                     Log.Info($"[deucalion] {Path.GetFileName(distrib)}  " +
                                       (match ? "checksum = Machina _checksum" : $"checksum MISMATCH (Machina expects {expected})"));
                 }
@@ -104,21 +114,21 @@ internal static class Sigcheck
                 Log.Info(runtime.Count > 0
                     ? "[machina]   runtime RECV signature: yes (Recv 교체는 Machina 문자열 + deucalion 내장 둘 다)"
                     : "[machina]   runtime RECV signature: no (구버전 - Recv 교체도 deucalion dll 을 직접 패치)");
-                rows.AddRange(runtime.Select(i => new Row(new Item("deucalion", "*", "Recv"), "machina", SigPattern.Parse((string)i.Operand))));
+                rows.AddRange(runtime.Select(i => new Row(new Item(SignatureKinds.Deucalion, "*", "Recv"), SignatureSources.Machina, SigLib.Parse((string)i.Operand))));
             }
             rows.AddRange(PluginSignatures.Read(plugin)
-                .Select(s => new Row(new Item(s.Kind, s.Variant, s.Name), "plugin", SigPattern.Parse(s.Pattern))));
+                .Select(s => new Row(new Item(s.Kind, s.Variant, s.Name), SignatureSources.Plugin, SigLib.Parse(s.Pattern))));
         }
         else Log.Note($"[machina]   플러그인 없음: {pluginPath}");
 
         string? dir = Directory.Exists(sigDir) ? sigDir : null;
         rows.AddRange(SignatureInput.Load(dir)
-            .Select(s => new Row(new Item("deucalion", "*", s.Name), "input", SigPattern.Parse(s.Pattern))));
-        foreach (string kind in new[] { "memory", "oodle" })
+            .Select(s => new Row(new Item(SignatureKinds.Deucalion, "*", s.Name), SignatureSources.Input, SigLib.Parse(s.Pattern))));
+        foreach (string kind in new[] { SignatureKinds.Memory, SignatureKinds.Oodle })
         {
             var variants = rows.Where(r => r.Item.Kind == kind).Select(r => r.Item.Variant).Distinct().ToList();
             foreach (var (variant, name, pattern) in SignatureInput.Resolve(SignatureInput.Load(dir, SignatureInput.FileFor(kind)), variants))
-                rows.Add(new Row(new Item(kind, variant, name), "input", SigPattern.Parse(pattern)));
+                rows.Add(new Row(new Item(kind, variant, name), SignatureSources.Input, SigLib.Parse(pattern)));
         }
         if (rows.Count == 0) throw new ToolException("점검할 시그니처가 없습니다.");
         return rows;
@@ -129,12 +139,12 @@ internal static class Sigcheck
     //   CreateTarget.* 은 deucalion 이 차례로 시도하는 후보라 하나만 맞으면 된다.
     private static (List<Broken> Broken, List<Item> OfficialBroken) Check(GameClient client, List<Row> rows)
     {
-        var exe = new ScanTarget(client.ExePath);
+        var exe = SigLib.Target(client.ExePath);
         var hits = rows.ToDictionary(r => r, r => r.Pattern.Scan(exe));
-        int width = rows.Max(r => r.Item.Kind == "deucalion" ? r.Item.Name.Length : r.Item.Name.Length + r.Item.Kind.Length + 1);
-        string Label(Row r) => r.Item.Kind == "deucalion" ? r.Item.Name : $"{r.Item.Kind}.{r.Item.Name}";
+        int width = rows.Max(r => r.Item.Kind == SignatureKinds.Deucalion ? r.Item.Name.Length : r.Item.Name.Length + r.Item.Kind.Length + 1);
+        string Label(Row r) => r.Item.Kind == SignatureKinds.Deucalion ? r.Item.Name : $"{r.Item.Kind}.{r.Item.Name}";
 
-        foreach (var r in rows.OrderBy(r => r.Item.Kind == "deucalion" ? 0 : r.Item.Kind == "memory" ? 1 : 2))
+        foreach (var r in rows.OrderBy(r => r.Item.Kind == SignatureKinds.Deucalion ? 0 : r.Item.Kind == SignatureKinds.Memory ? 1 : 2))
         {
             var m = hits[r];
             int targets = m.Where(x => x.Saves.Count > 0).Select(x => x.Saves[0]).Distinct().Count();
@@ -150,22 +160,22 @@ internal static class Sigcheck
         foreach (var group in rows.GroupBy(r => r.Item.Group).OrderBy(g => g.First().Item.Critical ? 0 : 1))
         {
             bool critical = group.First().Item.Critical;
-            if (group.Any(r => r.Source != "input") && !group.Any(r => r.Source != "input" && hits[r].Count > 0))
-                officialBroken.Add(group.First(r => r.Source != "input").Item);
+            if (group.Any(r => r.Source != SignatureSources.Input) && !group.Any(r => r.Source != SignatureSources.Input && hits[r].Count > 0))
+                officialBroken.Add(group.First(r => r.Source != SignatureSources.Input).Item);
             Row? via = null;
             foreach (var item in group.Select(r => r.Item).Distinct())
             {
-                var input = group.FirstOrDefault(r => r.Item == item && r.Source == "input");
-                IEnumerable<Row> used = input != null ? [input] : group.Where(r => r.Item == item && r.Source != "input");
+                var input = group.FirstOrDefault(r => r.Item == item && r.Source == SignatureSources.Input);
+                IEnumerable<Row> used = input != null ? [input] : group.Where(r => r.Item == item && r.Source != SignatureSources.Input);
                 via = used.FirstOrDefault(r => hits[r].Count > 0);
                 if (via != null) break;
             }
             if (via != null)
             {
-                if (critical || via.Source == "input") Log.Info($"  => {group.Key}: 정상 ({via.Source} {via.Item.Name})");
+                if (critical || via.Source == SignatureSources.Input) Log.Info($"  => {group.Key}: 정상 ({via.Source} {via.Item.Name})");
                 continue;
             }
-            var original = group.Where(r => r.Source != "input").ToList();
+            var original = group.Where(r => r.Source != SignatureSources.Input).ToList();
             broken.Add(new Broken(client, group.Key, critical, original));
             if (critical) Log.Error($"  => {group.Key}: 깨짐");
             else Log.Warn($"  => {group.Key}: 깨짐 (경고)");

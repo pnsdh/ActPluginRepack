@@ -13,7 +13,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel>
-                        <TextBlock Text="게임 위치" Style="{StaticResource Headline}" FontSize="15" />
+                        <TextBlock Text="게임 위치" Style="{StaticResource CardTitle}" />
                         <TextBlock Text="{Binding Games, Converter={StaticResource KeepAll}}" Style="{StaticResource Caption}" Margin="0,4,0,0" />
                     </StackPanel>
                     <ui:Button Grid.Column="1" Content="바꾸기" Icon="{ui:SymbolIcon Folder24}" VerticalAlignment="Center"
@@ -29,7 +29,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Margin="0,0,12,0">
-                        <TextBlock Text="작업 폴더" Style="{StaticResource Headline}" FontSize="15" />
+                        <TextBlock Text="작업 폴더" Style="{StaticResource CardTitle}" />
                         <TextBlock Text="{Binding WorkspaceFallback, Converter={StaticResource KeepAll}}" Style="{StaticResource Caption}" Margin="0,4,0,0" />
                     </StackPanel>
                     <ui:Button Grid.Column="1" Content="기본 폴더로 되돌리기" Icon="{ui:SymbolIcon ArrowReset24}" VerticalAlignment="Center"
@@ -43,7 +43,7 @@
                 <TextBlock Text="고급" Style="{StaticResource SectionLabel}" />
                 <ui:Card Padding="20,16">
                     <StackPanel>
-                        <TextBlock Text="작업 폴더" FontWeight="SemiBold" />
+                        <TextBlock Text="작업 폴더" Style="{StaticResource FieldLabel}" />
                         <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,6"
                                    Text="{Binding Source='input, output, 캐시를 두는 곳입니다. 비워 두면 기본 폴더를 씁니다. 저장소 폴더를 지정하면 CLI 와 같은 데이터를 씁니다.', Converter={StaticResource KeepAll}}" />
                         <Grid>
@@ -55,7 +55,7 @@
                             <ui:Button Grid.Column="1" Content="찾아보기" Margin="8,0,0,0" Command="{Binding BrowseWorkspaceCommand}" />
                         </Grid>
 
-                        <TextBlock Text="IDA Pro 설치 폴더" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock Text="IDA Pro 설치 폴더" Style="{StaticResource FieldLabel}" Margin="0,16,0,0" />
                         <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,6"
                                    Text="{Binding Source='opcode 직접 추출용입니다(IDA 9 이상 + Hex-Rays, 라이선스가 필요해 자동으로 받을 수 없습니다). 비워 두면 Program Files 에서 자동으로 찾습니다.', Converter={StaticResource KeepAll}}" />
                         <Grid>
@@ -69,7 +69,7 @@
 
                         <Grid Margin="0,16,0,0">
                             <StackPanel>
-                                <TextBlock Text="로컬 opcodediff" FontWeight="SemiBold" />
+                                <TextBlock Text="로컬 opcodediff" Style="{StaticResource FieldLabel}" />
                                 <TextBlock Style="{StaticResource Caption}"
                                            Text="{Binding Source='지금 게임 exe 와 직전 출시 exe(공식 패치 서버에서 받음)를 비교해 opcode 를 직접 구합니다(기본 켜짐). 공개 자료가 나오기 전에도 되고, 나온 뒤에는 대조에 씁니다. 스크립트·radare2 는 자동으로 받고, Python 3.12 이상이 없으면 휴대용 Python(약 14MB)도 받아 씁니다.', Converter={StaticResource KeepAll}}" />
                                 <TextBlock Style="{StaticResource Caption}" Text="{Binding PythonStatus, Converter={StaticResource KeepAll}}" Margin="0,2,0,0" />
@@ -81,7 +81,7 @@
 
                         <Grid Margin="0,16,0,0">
                             <StackPanel>
-                                <TextBlock Text="xiv-data-oxidizer 로 CSV 추출" FontWeight="SemiBold" />
+                                <TextBlock Text="xiv-data-oxidizer 로 CSV 추출" Style="{StaticResource FieldLabel}" />
                                 <TextBlock Style="{StaticResource Caption}" Text="SharpVision 대신 씁니다(git + Rust 필요)." />
                             </StackPanel>
                             <ui:ToggleSwitch IsChecked="{Binding Oxidizer}" AutomationProperties.Name="xiv-data-oxidizer 로 CSV 추출" HorizontalAlignment="Right" />
@@ -89,14 +89,14 @@
 
                         <Grid Margin="0,16,0,0">
                             <StackPanel>
-                                <TextBlock Text="패치본 배포 기능" FontWeight="SemiBold" />
+                                <TextBlock Text="고친 플러그인 배포 기능" Style="{StaticResource FieldLabel}" />
                                 <TextBlock Style="{StaticResource Caption}"
-                                           Text="{Binding Source='고급 모드에 \&quot;패치본 배포 묶음 만들기 (hotfix)\&quot; 를 보여 줍니다. FFXIV_ACT_Plugin_HotFix 저장소에 패치본을 올리는 사람만 켜면 됩니다.', Converter={StaticResource KeepAll}}" />
+                                           Text="{Binding Source='고급 모드에 \&quot;고친 플러그인 배포 묶음 만들기 (hotfix)\&quot; 를 보여 줍니다. FFXIV_ACT_Plugin_HotFix 저장소에 고친 플러그인을 올리는 사람만 켜면 됩니다.', Converter={StaticResource KeepAll}}" />
                             </StackPanel>
-                            <ui:ToggleSwitch IsChecked="{Binding Hotfix}" AutomationProperties.Name="패치본 배포 기능" HorizontalAlignment="Right" VerticalAlignment="Top" />
+                            <ui:ToggleSwitch IsChecked="{Binding Hotfix}" AutomationProperties.Name="고친 플러그인 배포 기능" HorizontalAlignment="Right" VerticalAlignment="Top" />
                         </Grid>
 
-                        <TextBlock Text="SharpVision 실행 파일" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock Text="SharpVision 실행 파일" Style="{StaticResource FieldLabel}" Margin="0,16,0,0" />
                         <ui:TextBox Text="{Binding SharpVision, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,0"
                                     PlaceholderText="비우면 최신 릴리스를 자동으로 받습니다" />
                     </StackPanel>
@@ -105,9 +105,9 @@
                 <!-- GitHub API 토큰 -->
                 <ui:Card Padding="20,16" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Text="GitHub API 토큰" FontWeight="SemiBold" />
+                        <TextBlock Text="GitHub API 토큰" Style="{StaticResource FieldLabel}" />
                         <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0"
-                                   Text="{Binding Source='릴리스·커밋 확인은 토큰이 없으면 GitHub 웹 페이지로 해서 API 한도(IP 당 시간당 60회)를 거의 쓰지 않습니다. 토큰이 있으면 형식이 약속된 API 를 먼저 쓰고(시간당 5000회), 실패하면 웹 페이지로 넘어갑니다. 공개 저장소만 읽으므로 권한을 하나도 주지 않은 토큰이면 충분합니다. 토큰은 이 PC 에 Windows 사용자 계정으로 암호화해 저장하며, 환경 변수 GITHUB_TOKEN 이나 GitHub CLI(gh) 로그인이 있으면 그것을 먼저 씁니다.', Converter={StaticResource KeepAll}}" />
+                                   Text="{Binding GitHubTokenHelp, Mode=OneTime, Converter={StaticResource KeepAll}}" />
                         <TextBlock Text="{Binding GitHubStatus, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" FontSize="13" Margin="0,8,0,6" />
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -141,13 +141,6 @@
                            Visibility="{Binding IsAdvanced, Converter={StaticResource Visible}}" />
                 <!-- Esc 로도 돌아가기 -->
                 <ui:Button Content="돌아가기" IsCancel="{Binding EscGoesBack, Mode=OneTime}" Command="{Binding BackCommand}" />
-            </StackPanel>
-
-            <!-- 이 프로그램 정보 -->
-            <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
-                <TextBlock Text="{Binding VersionText}" Style="{StaticResource Caption}" VerticalAlignment="Center" />
-                <ui:Button Content="새 버전 / 홈페이지" Icon="{ui:SymbolIcon Open24}" Appearance="Transparent" Margin="8,0,0,0"
-                           FontSize="12" Command="{Binding OpenRepoCommand}" ToolTip="이 프로그램의 GitHub 릴리스 페이지를 엽니다." />
             </StackPanel>
         </StackPanel>
     </ScrollViewer>

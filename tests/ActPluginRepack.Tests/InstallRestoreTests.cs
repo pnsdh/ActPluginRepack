@@ -38,10 +38,10 @@ public class InstallRestoreTests
         Assert.False(File.Exists(Path.Combine(e.Plugin, "deucalion-1.5.1.dll")));
     }
 
-    // 플러그인은 시작할 때 distrib 의 이름을 바꾸고, 해루봇은 opcodes.jsonc 를 덮어쓴다 — 같은 패치본을 다시 설치해도
-    // 새 백업(패치본이 "원래 파일"인)을 만들지 않고, 되돌리기 한 번으로 원래 파일로 돌아간다
+    // 플러그인은 시작할 때 distrib 의 이름을 바꾸고, 해루봇은 opcodes.jsonc 를 덮어쓴다 — 같은 패치본을 다시 설치하면 플러그인은
+    // 그대로 두고(패치본을 "원래 파일"로 담지 않게) opcodes.jsonc 만 새 백업에 담아 넣는다
     [Fact]
-    public void ReinstallAfterActStartedKeepsTheOriginalBackup()
+    public void ReinstallAfterActStartedBacksUpOnlyTheOverlayFile()
     {
         TestEnv.SkipIfActOrGameRunning();
         using var e = Setup();
@@ -51,29 +51,32 @@ public class InstallRestoreTests
         Assert.Equal("", e.Install().BackupDir);                // 플러그인만: 바꿀 것 없음
         File.WriteAllText(e.Jsonc, "official opcodes");               // 해루봇이 OverlayPlugin 배포본으로 덮어씀
         var again = e.Install(overlay: true);                   // opcodes.jsonc 만 다시 넣음
-        Assert.Equal(first, again.BackupDir);
+        Assert.NotEqual(first, again.BackupDir);
         Assert.Equal("our opcodes", File.ReadAllText(e.Jsonc));
-        Assert.Single(Directory.GetDirectories(e.Ws.BackupsDir));
+        Assert.DoesNotContain(BackupManifest.Load(again.BackupDir)!.Targets, t => t.Dir == e.Plugin);
 
-        Install.Restore(e.Ws);
+        Install.Restore(e.Ws);                                  // opcodes.jsonc 만
+        Assert.Equal("official opcodes", File.ReadAllText(e.Jsonc));
+        Install.Restore(e.Ws);                                  // 처음 설치
         AssertOriginal(e);
         Assert.Equal("official opcodes", File.ReadAllText(e.Jsonc));
     }
 
-    // 처음 설치 때 없던 대상(OverlayPlugin)만 나중에 생기면, 새 백업 대신 첫 백업에 보탠다 — 되돌리기 한 번으로 둘 다 원래대로
+    // 처음 설치 때 없던 대상(OverlayPlugin)만 나중에 넣으면 그것만 새 백업에 — restore 두 번으로 둘 다 원래대로
     [Fact]
-    public void LaterOverlayTargetIsAddedToTheFirstBackup()
+    public void LaterOverlayTargetGetsItsOwnBackup()
     {
         TestEnv.SkipIfActOrGameRunning();
         using var e = Setup();
         string first = e.Install().BackupDir;           // OverlayPlugin 없이
-        Assert.Equal(first, e.Install(overlay: true).BackupDir);
-        Assert.Single(Directory.GetDirectories(e.Ws.BackupsDir));
+        string second = e.Install(overlay: true).BackupDir;
+        Assert.NotEqual(first, second);
         Assert.Equal("our opcodes", File.ReadAllText(e.Jsonc));
 
-        Install.Restore(e.Ws);
-        AssertOriginal(e);
+        Assert.Equal(second, Install.Restore(e.Ws).BackupDir);
         Assert.Equal("official opcodes", File.ReadAllText(e.Jsonc));
+        Assert.Equal(first, Install.Restore(e.Ws).BackupDir);
+        AssertOriginal(e);
     }
 
     // 그 사이 OverlayPlugin 이 업데이트되어 opcodes.jsonc 가 바뀌었으면, 되돌릴 원래 파일도 지금 것으로 바꿔 둔다
@@ -87,21 +90,24 @@ public class InstallRestoreTests
         e.Install(overlay: true);
         Assert.Equal("our opcodes", File.ReadAllText(e.Jsonc));
 
-        Install.Restore(e.Ws);
+        Install.Restore(e.Ws);                                  // opcodes.jsonc 만 (원래 파일은 바뀐 그것)
+        Assert.Equal("updated official opcodes", File.ReadAllText(e.Jsonc));
+        Install.Restore(e.Ws);                                  // 처음 설치 — 그 뒤 바뀐 opcodes.jsonc 는 그대로
         AssertOriginal(e);
         Assert.Equal("updated official opcodes", File.ReadAllText(e.Jsonc));
     }
 
-    // 백업이 가리키는 폴더가 모두 없어졌으면 되돌리기를 내놓지 않는다
+    // 백업이 가리키는 폴더가 모두 없어졌으면 되돌릴 곳이 없다 (폴더를 다시 만들지 않는다)
     [Fact]
-    public void BackupWhoseFoldersAreAllGoneIsNotOffered()
+    public void RestoreRefusesWhenEveryFolderIsGone()
     {
         TestEnv.SkipIfActOrGameRunning();
         using var e = Setup();
         e.Install();
         Directory.Delete(e.Plugin, recursive: true);
-        Assert.Null(Install.RestorableBackup(e.Ws));
-        Assert.Contains("모두 없어져", Install.Restorable(e.Ws).Reason);
+        var ex = Assert.Throws<ToolException>(() => Install.Restore(e.Ws));
+        Assert.Contains("모두 없어져", ex.Message);
+        Assert.False(Directory.Exists(e.Plugin));
     }
 
     // 되돌리기가 한 파일에서 막혀도(백신이 잡고 있음 등) 플러그인은 이미 원래 것 — 다시 하면 마저 되돌린다
@@ -110,13 +116,13 @@ public class InstallRestoreTests
     {
         TestEnv.SkipIfActOrGameRunning();
         using var e = Setup();
-        e.Install();
+        string backup = e.Install().BackupDir;
         string distrib = Path.Combine(e.Plugin, "deucalion-1.5.1.distrib.dll");
         using (new FileStream(distrib, FileMode.Open, FileAccess.Read, FileShare.Read))
             Assert.Throws<ToolException>(() => Install.Restore(e.Ws));
         Assert.Equal("old official", File.ReadAllText(e.PluginFile));
 
-        Assert.NotNull(Install.RestorableBackup(e.Ws));
+        Assert.Equal(backup, Install.LatestBackup(e.Ws)); // 되돌림으로 적지 않았다
         Install.Restore(e.Ws);
         AssertOriginal(e);
     }
@@ -147,8 +153,7 @@ public class InstallRestoreTests
         var ex = Assert.Throws<ToolException>(() => Install.Restore(e.Ws));
         Assert.Contains("백업해 둔 원래 파일이 없습니다", ex.Message);
         Assert.Equal("our patch", File.ReadAllText(e.PluginFile));
-        Assert.Null(Install.RestorableBackup(e.Ws));
-        Assert.Contains("백업해 둔 원래 파일이 없습니다", Install.Restorable(e.Ws).Reason);
+        Assert.Equal("new deucalion", File.ReadAllText(Path.Combine(e.Plugin, "deucalion-1.5.1.distrib.dll")));
     }
 
     // 설치한 뒤 OverlayPlugin 을 지웠어도 FFXIV 플러그인은 되돌린다
@@ -178,7 +183,7 @@ public class InstallRestoreTests
             Install.Restore(e.Ws); // 바로 앞 패치본(our patch)으로
         }
         Assert.Equal(first, Install.LatestBackup(e.Ws));
-        Assert.True(Directory.GetDirectories(e.Ws.BackupsDir).Length <= 10);
+        Assert.Equal(10, Directory.GetDirectories(e.Ws.BackupsDir).Length);
         Install.Restore(e.Ws);
         AssertOriginal(e);
     }

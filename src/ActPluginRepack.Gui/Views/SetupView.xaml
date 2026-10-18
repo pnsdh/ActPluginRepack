@@ -1,10 +1,12 @@
 <UserControl x:Class="ActPluginRepack.Gui.Views.SetupView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:gui="clr-namespace:ActPluginRepack.Gui">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel MaxWidth="760" HorizontalAlignment="Center">
-            <TextBlock Text="게임 위치 확인" Style="{StaticResource PageTitle}" />
+            <!-- 제목은 이 화면을 여는 버튼 이름과 같게 -->
+            <TextBlock Text="{x:Static gui:Titles.GameLocation}" Style="{StaticResource PageTitle}" />
             <TextBlock Style="{StaticResource Body}" Margin="0,0,0,16"
                        Text="{Binding Intro, Converter={StaticResource KeepAll}}" />
 
@@ -31,7 +33,7 @@
                                             </TextBlock>
                                         </StackPanel>
                                         <ComboBox Grid.Column="2" ItemsSource="{Binding Regions}" SelectedItem="{Binding Region}"
-                                                  VerticalAlignment="Center" ToolTip="이 클라이언트의 지역"
+                                                  VerticalAlignment="Center" ToolTip="이 클라이언트의 지역입니다."
                                                   AutomationProperties.Name="{Binding InstallDir, StringFormat='{}{0} 의 지역'}">
                                             <ComboBox.ItemTemplate>
                                                 <DataTemplate>

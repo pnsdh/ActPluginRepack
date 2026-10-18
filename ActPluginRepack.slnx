@@ -1,10 +1,15 @@
 <Solution>
+  <Folder Name="/lib/">
+    <Project Path="lib/FFXIV.Signatures/FFXIV.Signatures/FFXIV.Signatures.csproj" />
+    <Project Path="lib/FFXIV.Signatures/FFXIV.Signatures.Tests/FFXIV.Signatures.Tests.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/ActPluginRepack.Cli/ActPluginRepack.Cli.csproj" />
     <Project Path="src/ActPluginRepack.Core/ActPluginRepack.Core.csproj" />
     <Project Path="src/ActPluginRepack.Gui/ActPluginRepack.Gui.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/ActPluginRepack.Gui.Tests/ActPluginRepack.Gui.Tests.csproj" />
     <Project Path="tests/ActPluginRepack.Tests/ActPluginRepack.Tests.csproj" />
   </Folder>
 </Solution>

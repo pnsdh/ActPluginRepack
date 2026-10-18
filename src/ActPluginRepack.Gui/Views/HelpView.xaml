@@ -1,0 +1,65 @@
+<UserControl x:Class="ActPluginRepack.Gui.Views.HelpView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:gui="clr-namespace:ActPluginRepack.Gui">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="760" HorizontalAlignment="Center">
+            <TextBlock Text="{x:Static gui:Titles.Help}" Style="{StaticResource PageTitle}" />
+
+            <!-- 문제 보고용 기록 (간편·고급 모두): 바탕화면에 zip 을 만들어 디스코드에 올리게 한다 -->
+            <ui:Card Padding="20,16">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,12,0">
+                            <TextBlock Text="문제가 생겼나요?" Style="{StaticResource CardTitle}" />
+                            <TextBlock Text="{Binding ReportHelp, Mode=OneTime, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,4,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <ui:Button Content="{x:Static gui:Titles.SaveReport}" Icon="{ui:SymbolIcon FolderZip24}" HorizontalAlignment="Stretch"
+                                       Appearance="Primary" Command="{Binding SaveReportCommand}"
+                                       ToolTip="작업 기록, 오류 기록, 설정, ACT 플러그인 폴더의 파일 목록을 zip 하나로 묶어 바탕화면에 저장합니다. GitHub 토큰과 플러그인 파일 자체는 넣지 않습니다." />
+                            <ui:Button Content="{x:Static gui:Titles.Discord}" Icon="{ui:SymbolIcon Chat24}" HorizontalAlignment="Stretch" Margin="0,6,0,0"
+                                       Command="{Binding OpenDiscordCommand}" ToolTip="문의와 문제 보고를 받는 디스코드 서버를 엽니다." />
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Text="{Binding ReportStatus, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,8,0,0"
+                               Visibility="{Binding ReportStatus, Converter={StaticResource Visible}}" />
+                </StackPanel>
+            </ui:Card>
+
+            <!-- 자주 묻는 질문: 질문만 보이고 누르면 답이 펼쳐진다 -->
+            <TextBlock Text="자주 묻는 질문" Style="{StaticResource SectionLabel}" />
+            <ItemsControl ItemsSource="{Binding Faq, Mode=OneTime}" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <ui:CardExpander Margin="0,0,0,6" Icon="{ui:SymbolIcon QuestionCircle24}">
+                            <ui:CardExpander.Header>
+                                <TextBlock Text="{Binding Question, Converter={StaticResource KeepAll}}" Style="{StaticResource FieldLabel}" TextWrapping="Wrap" />
+                            </ui:CardExpander.Header>
+                            <TextBlock Text="{Binding Answer, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" />
+                        </ui:CardExpander>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                <!-- 입력칸이 없으므로 Esc 로도 돌아가기 -->
+                <ui:Button Content="돌아가기" IsCancel="True" Command="{Binding BackCommand}" />
+            </StackPanel>
+
+            <!-- 이 프로그램 정보 -->
+            <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                <TextBlock Text="{Binding VersionText, Mode=OneTime}" Style="{StaticResource Caption}" VerticalAlignment="Center" />
+                <ui:Button Content="새 버전 / GitHub" Icon="{ui:SymbolIcon Open24}" Appearance="Transparent" Margin="8,0,0,0"
+                           FontSize="12" Command="{Binding OpenRepoCommand}" ToolTip="이 프로그램의 GitHub 릴리스 페이지를 엽니다. 새 버전과 소스가 있습니다." />
+                <ui:Button Content="{x:Static gui:Titles.Discord}" Icon="{ui:SymbolIcon Chat24}" Appearance="Transparent" Margin="4,0,0,0"
+                           FontSize="12" Command="{Binding OpenDiscordCommand}" ToolTip="문의와 문제 보고를 받는 디스코드 서버를 엽니다." />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

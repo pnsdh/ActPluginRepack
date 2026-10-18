@@ -1,8 +1,9 @@
-namespace ActPluginRepack.Tests;
+namespace FFXIV.Signatures.Tests;
 
 // 실제 deucalion 수정 이력으로 SigRegen 을 검증한다. 게임 exe 가 필요해 저장소에는 넣을 수 없으므로
 // 환경 변수로 위치를 알려 줄 때만 돈다:
-//   ACTREPACK_BACKTEST_DIR   <패치 파일 버전>.exe 들이 있는 폴더 (예: 2025.06.28.0000.0001.exe — fetch-exe --patch 로 받음)
+//   FFXIV_SIGNATURES_BACKTEST_DIR   <패치 파일 버전>.exe 들이 있는 폴더 (예: 2025.06.28.0000.0001.exe — ActPluginRepack 의
+//                                   fetch-exe --patch 로 받음)
 // 7.57 RECV 는 snapshots\global\<버전>\ffxiv_dx11.exe 대신 같은 폴더의 2026.09.15.0000.0000.exe / 2026.10.06.0000.0000.exe 를 쓴다.
 public class SigRegenBacktests
 {
@@ -21,8 +22,8 @@ public class SigRegenBacktests
     [MemberData(nameof(Cases))]
     public void RegeneratesToSamePlacesAsRealFix(string name, string oldExe, string newExe, string oldPattern, string truth)
     {
-        string? dir = Environment.GetEnvironmentVariable("ACTREPACK_BACKTEST_DIR");
-        if (dir == null) Assert.Skip("ACTREPACK_BACKTEST_DIR 없음");
+        string? dir = Environment.GetEnvironmentVariable("FFXIV_SIGNATURES_BACKTEST_DIR");
+        if (dir == null) Assert.Skip("FFXIV_SIGNATURES_BACKTEST_DIR 없음");
         string oldPath = Path.Combine(dir, oldExe + ".exe"), newPath = Path.Combine(dir, newExe + ".exe");
         if (!File.Exists(oldPath) || !File.Exists(newPath)) Assert.Skip($"{name}: exe 없음");
 

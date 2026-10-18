@@ -10,9 +10,14 @@
 
   <ItemGroup>
     <PackageReference Include="Mono.Cecil" Version="0.11.5" />
-    <PackageReference Include="Iced" Version="1.21.0" />
     <!-- 저장한 GitHub 토큰 암호화 (Windows DPAPI, 현재 사용자만 풂) -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+
+  <!-- 시그니처 스캔·재생성은 저장소 안의 별도 라이브러리 (lib\FFXIV.Signatures — 다른 도구도 쓴다) -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\lib\FFXIV.Signatures\FFXIV.Signatures\FFXIV.Signatures.csproj" />
+    <Using Include="FFXIV.Signatures" />
   </ItemGroup>
 
   <!-- 형식은 internal 로 두고 프런트엔드에만 연다 -->

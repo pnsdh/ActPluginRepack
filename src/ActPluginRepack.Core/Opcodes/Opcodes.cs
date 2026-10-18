@@ -1,12 +1,21 @@
 using System.Globalization;
-using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mono.Cecil;
 
 // opcode 한 벌: 서버 패킷 이름 -> opcode. 이름은 표준 이름(OpcodeNames)으로 맞춰 둔다.
-internal sealed record OpcodeSet(string Source, Dictionary<string, int> Server, string? PatchLabel = null);
+internal sealed record OpcodeSet(string Source, Dictionary<string, int> Server, string? PatchLabel = null)
+{
+    // 고른 출처에 없는 이름을 다른 출처로 채웠을 때 Source 끝에 붙는 표시 (.state.json 에 Source 째로 저장된다)
+    private const string FilledSuffix = " +보충";
+
+    public static string WithFilled(string source, bool filled) => filled ? source + FilledSuffix : source;
+
+    // WithFilled 로 만든 출처 이름 -> (고른 출처, 보충했는지)
+    public static (string Source, bool Filled) SplitFilled(string source) =>
+        source.EndsWith(FilledSuffix, StringComparison.Ordinal) ? (source[..^FilledSuffix.Length], true) : (source, false);
+}
 
 // 표준 이름 = Yarukon ffxiv_opcode_finder 의 ServerZoneIpcType 이름. 출력 형식마다 이름이 달라 여기서 잇는다.
 internal static class OpcodeNames
@@ -104,13 +113,20 @@ internal static class OpcodeSources
         string? json = Http.GetStringOrNull(KarashiiroUrl);
         var result = new Dictionary<string, OpcodeSet>(StringComparer.Ordinal);
         if (json == null) return result;
-        using var doc = JsonDocument.Parse(json);
-        foreach (var entry in doc.RootElement.EnumerateArray())
+        try
         {
-            string region = entry.GetProperty("region").GetString()!;
-            string version = entry.GetProperty("version").GetString() ?? "?";
-            result[region] = new OpcodeSet($"karashiiro {region} {version}",
-                ReadList(entry.GetProperty("lists"), OpcodeNames.FromKarashiiro), PatchLabel: version);
+            using var doc = JsonDocument.Parse(json);
+            foreach (var entry in doc.RootElement.EnumerateArray())
+            {
+                string region = entry.GetProperty("region").GetString()!;
+                string version = entry.GetProperty("version").GetString() ?? "?";
+                result[region] = new OpcodeSet($"karashiiro {region} {version}",
+                    ReadList(entry.GetProperty("lists"), OpcodeNames.FromKarashiiro), PatchLabel: version);
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            throw new ToolException($"karashiiro 의 opcodes.min.json 형식이 예상과 다릅니다: {ex.Message}");
         }
         return result;
     }
@@ -179,7 +195,7 @@ internal static class MachinaOpcodes
     {
         using var machina = Costura.ReadInner(plugin, Costura.Machina);
         string name = Costura.OpcodePrefix + region + ".txt";
-        var res = Costura.Find(machina, name) ?? throw new ToolException($"베이스 플러그인에 {name} 리소스가 없습니다.");
+        var res = Costura.Find(machina, name) ?? throw new ToolException($"공식 플러그인에 {name} 리소스가 없습니다.");
         return Encoding.UTF8.GetString(res.GetResourceData());
     }
 

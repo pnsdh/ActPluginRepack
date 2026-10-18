@@ -5,7 +5,7 @@ internal static class Elevated
 
     public static int Relaunch(string command, IEnumerable<string> args, string reason)
     {
-        Log.Warn($"[{command}] {reason} - 관리자 권한으로 다시 실행 (Windows 의 확인 창에서 '예')");
+        Log.Warn($"[{command}] {reason} - {ElevatedRunner.RelaunchNote}");
         string exe = Environment.ProcessPath ?? throw new ToolException("실행 파일 경로를 알 수 없습니다.");
         // dotnet ActPluginRepack.dll 로 실행된 경우는 dll 을 넘긴다
         string cli = Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)

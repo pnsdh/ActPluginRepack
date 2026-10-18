@@ -13,7 +13,10 @@ internal sealed partial class SettingsViewModel : ObservableObject
         var (c, error) = AppState.TryLoadConfig();
         _configError = error;
         _rootLoaded = AppState.Workspace.Root;
-        _message = message;
+        _settingErrors = c.SettingErrors.Keys.ToList();
+        _message = message ?? (IsAdvanced && c.SettingErrors.Count > 0
+            ? $"설정 파일({Config.FileName})의 다음 항목은 값이 틀려 쓰지 않습니다. [저장]을 누르면 지웁니다.\n" + string.Join("\n", c.SettingErrors.Values)
+            : null);
         WorkspaceFallback = AppState.WorkspaceFallback;
         _workspace = AppState.Settings.Workspace ?? "";
         _oxidizer = _oxidizerLoaded = c.Oxidizer != null;
@@ -35,39 +38,32 @@ internal sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    // 쓸 Python (py 런처를 실행하므로 화면을 막지 않게 따로)
-    private async Task RefreshPythonAsync(string? python)
+    // 쓸 Python (py 런처를 실행하므로 화면을 막지 않게 따로. 그 사이 다시 확인했으면 늦게 끝난 옛 결과로 덮지 않는다)
+    private Task RefreshPythonAsync(string? python)
     {
-        int check = ++_pythonCheck;
         if (!global::LocalDiff.HasPython(python))
         {
+            _pythonCheck.Begin(); // 앞서 시작한 확인의 결과로 덮지 않게
             PythonStatus = "아래에 적은 python.exe 가 없습니다. 고치거나 비우세요.";
-            return;
+            return Task.CompletedTask;
         }
         PythonStatus = "Python 확인 중...";
-        string status = await Task.Run(() =>
-        {
-            try
-            {
-                return global::LocalDiff.InstalledPython(python) is { } installed
-                    ? $"설치된 Python 을 씁니다: {installed}"
-                    : "설치된 Python 3.12 이상이 없어, 필요할 때 휴대용 Python(약 14MB)을 받아 씁니다.";
-            }
-            catch (Exception ex) when (Errors.Recoverable(ex))
-            {
-                return $"설치된 Python 을 확인하지 못했습니다. 필요할 때 휴대용 Python(약 14MB)을 받아 씁니다. ({Errors.Describe(ex)})";
-            }
-        });
-        if (check == _pythonCheck) PythonStatus = status; // 그 사이 다시 확인했으면 늦게 끝난 옛 결과로 덮지 않는다
+        return _pythonCheck.Run(
+            () => global::LocalDiff.InstalledPython(python) is { } installed
+                ? $"설치된 Python 을 씁니다: {installed}"
+                : "설치된 Python 3.12 이상이 없어, 필요할 때 휴대용 Python(약 14MB)을 받아 씁니다.",
+            ex => $"설치된 Python 을 확인하지 못했습니다. 필요할 때 휴대용 Python(약 14MB)을 받아 씁니다. ({Errors.Describe(ex)})",
+            "gui python", status => PythonStatus = status);
     }
 
-    private int _pythonCheck, _gitHubCheck;
+    private readonly LatestOnly _pythonCheck = new(), _gitHubCheck = new();
 
     // 이 화면을 연 때의 모드 (모드를 바꾸면 MainViewModel 이 이 화면을 새로 연다 — 보이는 항목과 저장하는 항목이 같게)
     public bool IsAdvanced { get; } = Navigator.Main.IsAdvanced;
     // Esc 로 돌아가기는 입력칸이 없는 간편 모드에서만 (고급 모드에서 입력칸을 지우려고 누른 Esc 로 고친 내용을 잃지 않게)
     public bool EscGoesBack => !IsAdvanced;
     private readonly string? _configError; // config.json 을 읽지 못함 -> 아래 도구 설정은 기본값이라 저장하지 않는다
+    private readonly List<string> _settingErrors; // 값이 틀려 쓰지 않는 항목 — 이 화면에서 쓰지 않는 것도 저장할 때 지운다
     private readonly string _rootLoaded;   // 이 화면의 도구 설정을 읽어 온 작업 폴더
     public string Games { get; }
     public string DefaultWorkspace => AppPaths.UserRoot;
@@ -92,25 +88,22 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _gitHubToken = "";
     [ObservableProperty] private bool _hasSavedToken = GitHub.HasSavedToken;
 
-    private async Task RefreshGitHubAsync()
+    // 토큰 설명의 한도 (Core 의 값으로)
+    public string GitHubTokenHelp =>
+        $"릴리스·커밋 확인은 토큰이 없으면 GitHub 웹 페이지로 해서 API 한도(IP 당 시간당 {GitHub.AnonymousLimit}회)를 거의 쓰지 않습니다. " +
+        $"토큰이 있으면 형식이 약속된 API 를 먼저 쓰고(시간당 {GitHub.TokenLimit}회), 실패하면 웹 페이지로 넘어갑니다. " +
+        "공개 저장소만 읽으므로 권한을 하나도 주지 않은 토큰이면 충분합니다. 토큰은 이 PC 에 Windows 사용자 계정으로 암호화해 저장하며, " +
+        "환경 변수 GITHUB_TOKEN 이나 GitHub CLI(gh) 로그인이 있으면 그것을 먼저 씁니다.";
+
+    // 토큰을 저장하며 다시 확인했으면 먼저 시작한 옛 결과로 덮지 않는다
+    private Task RefreshGitHubAsync()
     {
-        int check = ++_gitHubCheck;
         GitHubStatus = "확인 중...";
-        string status = await Task.Run(() =>
+        return _gitHubCheck.Run(() => GitHub.TryDescribeUsage().Text, ex => GitHub.UsageUnknown(ex), "gui github", status =>
         {
-            try
-            {
-                var token = GitHub.Token;
-                return GitHub.Query() is { } limit
-                    ? $"{(token == null ? "토큰 없음" : $"사용 중: {token.Value.Source}")} — 시간당 {limit.Limit}회 중 {limit.Remaining}회 남음, {limit.Reset.ToLocalTime():HH:mm} 초기화"
-                    : "사용량을 확인하지 못했습니다.";
-            }
-            // 네트워크·파일 오류도 여기서 (못 잡으면 "확인 중..." 에 멈춘다)
-            catch (Exception ex) when (Errors.Recoverable(ex)) { return $"사용량을 확인하지 못했습니다: {Errors.Describe(ex)}"; }
+            GitHubStatus = status;
+            HasSavedToken = GitHub.HasSavedToken;
         });
-        if (check != _gitHubCheck) return; // 토큰을 저장하며 다시 확인했으면 먼저 시작한 옛 결과로 덮지 않는다
-        GitHubStatus = status;
-        HasSavedToken = GitHub.HasSavedToken;
     }
 
     [RelayCommand]
@@ -148,15 +141,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
         await RefreshGitHubAsync();
     }
 
-    public string VersionText => $"버전 {AppInfo.DisplayVersion}";
-
     [RelayCommand]
-    private static void OpenRepo() =>
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(AppInfo.ReleasesUrl) { UseShellExecute = true });
-
-    [RelayCommand]
-    private static void OpenTokenPage() =>
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(GitHub.TokenPageUrl) { UseShellExecute = true });
+    private static void OpenTokenPage() => Shell.Open(GitHub.TokenPageUrl);
 
     [RelayCommand]
     private void EditGames() => Navigator.Show(new SetupViewModel(firstRun: false));
@@ -174,13 +160,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
     {
         try
         {
-            AppState.Settings.Workspace = null;
-            AppState.Settings.Save();
+            AppState.Settings.SaveChanged(s => s.Workspace = null);
             Navigator.Show(new SettingsViewModel($"기본 작업 폴더로 되돌렸습니다: {AppState.Workspace.Root}"));
         }
-        catch (Exception ex) when (ex is ToolException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (Errors.IsToolOrFileError(ex))
         {
-            Message = $"저장하지 못했습니다: {(ex is ToolException ? ex.Message : Errors.Describe(ex))}";
+            Message = $"저장하지 못했습니다: {Errors.Describe(ex)}";
         }
     }
 
@@ -208,12 +193,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 }
                 Directory.CreateDirectory(workspace); // 없는 폴더면 만든다 (없으면 기본 폴더로 넘어가므로)
             }
-            if (IsAdvanced)
+            AppState.Settings.SaveChanged(s =>
             {
-                AppState.Settings.Workspace = workspace;
-                AppState.Settings.Hotfix = Hotfix;
-            }
-            AppState.Settings.Save();
+                if (!IsAdvanced) return;
+                s.Workspace = workspace;
+                s.Hotfix = Hotfix;
+            });
             string root = AppState.Workspace.Root;
 
             // 작업 폴더를 바꿨으면 이 화면의 도구 설정은 옛 작업 폴더의 config.json 값이다 -> 새 폴더에 쓰지 않고
@@ -231,18 +216,24 @@ internal sealed partial class SettingsViewModel : ObservableObject
                     Message = $"화면 설정은 저장했지만, 설정 파일({Config.FileName})을 읽지 못해 도구 설정은 저장하지 않았습니다. 파일을 고친 뒤 다시 여세요.\n({_configError})";
                     return;
                 }
-                if (Oxidizer != _oxidizerLoaded) Config.Set(root, "oxidizer", Oxidizer ? JsonValue.Create(true) : null);
-                Config.Set(root, "sharpVision", Text(SharpVision));
-                if (Ida.Trim() != _idaLoaded) Config.Set(root, "ida", Text(Ida)); // 비우면 자동 탐색 ("ida": false 는 그대로 둠)
-                Config.Set(root, "localDiff", LocalDiff ? null : JsonValue.Create(false)); // 기본 켜짐
-                Config.Set(root, "python", Text(Python));
+                // 한 번에 쓴다 (도중에 실패해도 일부만 바뀌지 않게)
+                var changes = new List<KeyValuePair<string, JsonNode?>>();
+                if (Oxidizer != _oxidizerLoaded) changes.Add(new("oxidizer", Oxidizer ? JsonValue.Create(true) : null));
+                changes.Add(new("sharpVision", Text(SharpVision)));
+                if (Ida.Trim() != _idaLoaded) changes.Add(new("ida", Text(Ida))); // 비우면 자동 탐색 ("ida": false 는 그대로 둠)
+                changes.Add(new("localDiff", LocalDiff ? null : JsonValue.Create(false))); // 기본 켜짐
+                changes.Add(new("python", Text(Python)));
+                // 값이 틀려 쓰지 않던 항목은 이 화면의 값(위)으로 바꾸거나 지운다 (idaTarget 처럼 화면에 없는 것도)
+                foreach (string key in _settingErrors.Where(k => !changes.Any(x => x.Key == k))) changes.Add(new(key, null));
+                Config.Set(root, changes);
                 _ = RefreshPythonAsync(string.IsNullOrWhiteSpace(Python) ? null : Python.Trim()); // 고친 경로로 다시 확인
             }
             Message = "저장했습니다.";
         }
-        catch (Exception ex) when (ex is ToolException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        // ArgumentException / NotSupportedException: 작업 폴더 경로의 형식이 틀림 (Path.GetFullPath)
+        catch (Exception ex) when (Errors.IsToolOrFileError(ex) || ex is ArgumentException or NotSupportedException)
         {
-            Message = $"저장하지 못했습니다: {(ex is ToolException ? ex.Message : Errors.Describe(ex))}";
+            Message = $"저장하지 못했습니다: {Errors.Describe(ex)}";
         }
     }
 
@@ -258,8 +249,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
                "또는 이미 쓰던 작업 폴더(config.json 이나 input 폴더가 있는 곳)를 고르세요. 비워 두면 기본 폴더를 씁니다.";
     }
 
-    private static bool SamePath(string a, string b) =>
-        string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+    private static bool SamePath(string a, string b) => Files.SamePath(a, b);
 
     private static JsonNode? Text(string s) => string.IsNullOrWhiteSpace(s) ? null : JsonValue.Create(s.Trim());
 

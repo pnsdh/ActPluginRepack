@@ -214,11 +214,8 @@ internal static class GitHub
     private static Exception AsTool(Exception ex, string what) =>
         ex as ToolException ?? new ToolException($"{what}: 받은 자료의 형식이 예상과 다릅니다. 원본 페이지의 형식이 바뀌었을 수 있습니다. ({ex.Message})");
 
-    private static bool Fallible(Exception ex) =>
-        ex is ToolException or JsonException or KeyNotFoundException or InvalidOperationException or FormatException
-            or System.Xml.XmlException;
-
-    private static TimeSpan Clamp(TimeSpan v, TimeSpan min, TimeSpan max) => v < min ? min : v > max ? max : v;
+    // 다른 쪽(API / 웹)으로 다시 해 볼 실패: 받지 못함, 형식이 다름
+    private static bool Fallible(Exception ex) => ex is ToolException or System.Xml.XmlException || Errors.IsDataFormat(ex);
 
     private static void Blocked(bool api, Exception ex)
     {
@@ -226,7 +223,7 @@ internal static class GitHub
         {
             GitHubLimitException g => g.Reset?.UtcDateTime ?? DateTime.UtcNow.AddMinutes(10),
             // Http 의 서버 건너뛰기와 같은 규칙: 서버가 말한 시간을 1~10분으로 (말하지 않으면 1분)
-            ThrottledException t => DateTime.UtcNow + Clamp(t.RetryAfter ?? TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(10)),
+            ThrottledException t => DateTime.UtcNow + Http.BackOff(t.RetryAfter),
             _ => null,
         };
         if (until == null) return;
@@ -245,7 +242,7 @@ internal static class GitHub
     private static List<GitHubCommit> CommitsFromApi(string repo, string branch, string? path, int count)
     {
         string url = $"https://api.github.com/repos/{repo}/commits?sha={branch}&per_page={count}" + (path != null ? $"&path={path}" : "");
-        string json = Http.GetStringOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+        string json = Http.GetString(url);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.EnumerateArray().Select(c => new GitHubCommit(
             c.GetProperty("sha").GetString() ?? throw new ToolException($"커밋 목록에 커밋 번호가 없습니다 ({url})."),
@@ -257,7 +254,7 @@ internal static class GitHub
     private static List<GitHubCommit> CommitsFromWeb(string repo, string branch, string? path, int count)
     {
         string url = $"https://github.com/{repo}/commits/{branch}{(path != null ? "/" + path : "")}.atom";
-        string xml = Http.GetStringOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+        string xml = Http.GetString(url);
         System.Xml.Linq.XNamespace ns = "http://www.w3.org/2005/Atom";
         var list = System.Xml.Linq.XDocument.Parse(xml).Root!.Elements(ns + "entry").Select(e => new GitHubCommit(
             System.Text.RegularExpressions.Regex.Match((string?)e.Element(ns + "id") ?? "", "Commit/([0-9a-f]{40})").Groups[1].Value,
@@ -269,9 +266,32 @@ internal static class GitHub
         return list;
     }
 
-    // 사람이 읽는 한 줄: "52/60 남음, 15:42 초기화 (토큰 없음)"
+    // api.github.com 의 시간당 한도 (토큰 없음: IP 당, 토큰: 계정당)
+    public const int AnonymousLimit = 60, TokenLimit = 5000;
+
+    // 사용량 한 줄 (CLI github, 고급 화면, 설정 화면이 같은 말로)
     public static string Describe(GitHubRateLimit limit, string? source) =>
-        $"{limit.Remaining}/{limit.Limit} 남음, {limit.Reset.ToLocalTime():HH:mm} 초기화 ({source ?? "토큰 없음"})";
+        $"시간당 {limit.Limit}회 중 {limit.Remaining}회 남음, {limit.Reset.ToLocalTime():HH:mm} 초기화 ({source ?? "토큰 없음"})";
+
+    // 지금 사용량 한 줄(Ok), 또는 확인하지 못한 까닭 (CLI status, 고급 화면, 설정 화면이 같은 말로).
+    // brief: 좁은 칸용 ("확인 불가 (까닭)"), 아니면 문장. 흔한 실패(네트워크, 형식이 다른 응답 등)만 실패 문장으로 — 그 밖의 예외(버그)는 그대로 올린다.
+    public static (bool Ok, string Text) TryDescribeUsage(bool brief = false)
+    {
+        try
+        {
+            return Query() is { } limit ? (true, Describe(limit, Token?.Source)) : (false, UsageUnknown(null, brief));
+        }
+        catch (Exception ex) when (Errors.Recoverable(ex))
+        {
+            return (false, UsageUnknown(ex, brief));
+        }
+    }
+
+    // 사용량을 확인하지 못했을 때의 문장 (ex: 그 까닭, 모르면 null)
+    public static string UsageUnknown(Exception? ex, bool brief = false) =>
+        brief
+            ? ex == null ? "확인 불가" : $"확인 불가 ({Errors.Describe(ex)})"
+            : ex == null ? "사용량을 확인하지 못했습니다." : $"사용량을 확인하지 못했습니다: {Errors.Describe(ex)}";
 
     private static long? Header(HttpResponseMessage resp, string name) =>
         resp.Headers.TryGetValues(name, out var v) && long.TryParse(v.FirstOrDefault(), out long n) ? n : null;
@@ -283,7 +303,7 @@ internal static class GitHub
         {
             return System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(TokenFile), Entropy, DataProtectionScope.CurrentUser));
         }
-        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is CryptographicException || Errors.IsFileError(ex))
         {
             return null; // 다른 사용자/PC 에서 만든 파일 등 — 없는 것으로
         }
@@ -303,4 +323,116 @@ internal static class GitHub
             return null; // gh 없음 / 시간 초과
         }
     }
+}
+
+// GitHub 의 최신 릴리스 (태그 + 첨부 파일). 플러그인 / SharpVision / deucalion 이 쓴다.
+internal sealed record GitHubRelease(string Repo, string Tag, IReadOnlyList<(string Name, string Url)> Assets)
+{
+    // 게시 시각 (UTC)과 시험판 여부 — List 만 채운다 (Latest / ByTag 는 null / false)
+    public DateTime? PublishedAt { get; init; }
+    public bool Prerelease { get; init; }
+
+    // 최근 릴리스 count 개(최대 100), 최신부터. 초안(게시 전)은 뺀다. 받지 못하거나 형식이 다르면 ToolException.
+    // 개발용(replay)이라 웹 페이지 대신 API 한 번으로 — 웹의 릴리스 목록은 쪽마다 10개에 게시 시각을 읽기 번거롭다.
+    public static IReadOnlyList<GitHubRelease> List(string repo, int count = 100)
+    {
+        string api = $"https://api.github.com/repos/{repo}/releases?per_page={Math.Clamp(count, 1, 100)}";
+        string json = Http.GetString(api);
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.EnumerateArray()
+                .Where(r => !(r.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True))
+                .Select(r => new GitHubRelease(repo, r.GetProperty("tag_name").GetString()
+                                                     ?? throw new ToolException($"GitHub 릴리스 정보에 태그가 없습니다 ({api})."), ReadAssets(r, api))
+                {
+                    PublishedAt = r.TryGetProperty("published_at", out var p) && p.ValueKind == JsonValueKind.String
+                        ? p.GetDateTime().ToUniversalTime() : null,
+                    Prerelease = r.TryGetProperty("prerelease", out var pre) && pre.ValueKind == JsonValueKind.True,
+                })
+                .ToList();
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            throw new ToolException($"GitHub 릴리스 목록의 형식이 예상과 다릅니다 ({api}): {ex.Message}");
+        }
+    }
+
+    // 릴리스가 없으면 null (API 404, 웹은 릴리스 목록으로 넘어갈 때만). 받지 못하거나 형식이 다르면 ToolException.
+    // 토큰이 있으면 API 먼저, 없으면 웹 페이지 먼저 (GitHub.Fetch).
+    public static GitHubRelease? Latest(string repo) =>
+        GitHub.Fetch($"release:{repo}", $"{repo} 최신 릴리스", () => FromApi(repo, "latest"), () => FromWeb(repo));
+
+    // 태그로 (이 도구의 자동 업데이트 — 최신 릴리스가 아니라 v 태그를 고르므로)
+    public static GitHubRelease? ByTag(string repo, string tag) =>
+        GitHub.Fetch($"release:{repo}:{tag}", $"{repo} 릴리스 {tag}",
+                     () => FromApi(repo, $"tags/{Uri.EscapeDataString(tag)}"), () => FromWebTag(repo, tag));
+
+    // github.com/<repo>/releases/latest 는 최신 태그 페이지로 넘어가고, 첨부 파일 목록은 expanded_assets/<태그> 에 있다.
+    // 넘어가는 주소(Location)만 읽는다 — 태그 페이지 전체를 받지 않게 (IP 를 나눠 쓰면 웹 요청도 막히기 쉽다).
+    // 릴리스가 없다고 확실한 경우(저장소 없음 404, 릴리스 목록 페이지로 넘어감)만 null, 예상과 다르면 ToolException
+    // (GitHub.Fetch 가 API 로 다시 확인하게).
+    private static GitHubRelease? FromWeb(string repo)
+    {
+        string url = $"https://github.com/{repo}/releases/latest";
+        Uri? location;
+        int status;
+        using (var resp = Http.Send(url, redirect: false))
+        {
+            if (resp == null) return null; // 저장소 없음
+            status = (int)resp.StatusCode;
+            location = resp.Headers.Location is { } loc ? new Uri(new Uri(url), loc) : null;
+        }
+        if (location is { Host: "github.com" })
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(location.AbsolutePath, "/releases/tag/(.+)$");
+            if (m.Success) return FromWebTag(repo, Uri.UnescapeDataString(m.Groups[1].Value));
+            if (location.AbsolutePath.TrimEnd('/').Equals($"/{repo}/releases", StringComparison.OrdinalIgnoreCase))
+                return null; // 릴리스가 없으면 목록 페이지로 간다
+        }
+        throw new ToolException($"{url} 이(가) 최신 태그 페이지로 넘어가지 않았습니다 (HTTP {status}{(location != null ? $", {location}" : "")}).");
+    }
+
+    // 그 태그의 릴리스가 없을 때도 404 지만 주소 형식이 바뀌어도 404 라 구분할 수 없다 — ToolException 으로 넘겨 API 가 확인하게
+    private static GitHubRelease FromWebTag(string repo, string tag)
+    {
+        string url = $"https://github.com/{repo}/releases/expanded_assets/{Uri.EscapeDataString(tag)}";
+        string page = Http.GetStringOrNull(url) ?? throw new ToolException($"{tag} 릴리스의 첨부 파일 목록을 찾지 못했습니다 ({url}).");
+        var assets = System.Text.RegularExpressions.Regex
+            .Matches(page, $@"href=""(/{System.Text.RegularExpressions.Regex.Escape(repo)}/releases/download/[^""]+)""",
+                     System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            .Select(x => System.Net.WebUtility.HtmlDecode(x.Groups[1].Value)).Distinct()
+            .Select(href => (Uri.UnescapeDataString(href[(href.LastIndexOf('/') + 1)..]), "https://github.com" + href))
+            .ToList();
+        if (assets.Count == 0) throw new ToolException($"{tag} 릴리스의 첨부 파일 목록을 읽지 못했습니다 ({url}).");
+        return new GitHubRelease(repo, tag, assets);
+    }
+
+    // which: "latest" 또는 "tags/<태그>"
+    private static GitHubRelease? FromApi(string repo, string which)
+    {
+        string api = $"https://api.github.com/repos/{repo}/releases/{which}";
+        string? json = Http.GetStringOrNull(api);
+        if (json == null) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            return new GitHubRelease(repo, root.GetProperty("tag_name").GetString()
+                                           ?? throw new ToolException($"GitHub 릴리스 정보에 태그가 없습니다 ({api})."), ReadAssets(root, api));
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            throw new ToolException($"GitHub 릴리스 정보의 형식이 예상과 다릅니다 ({api}): {ex.Message}");
+        }
+    }
+
+    // API 의 릴리스 하나의 첨부 파일 (이름, 받을 주소)
+    private static List<(string Name, string Url)> ReadAssets(JsonElement release, string api) =>
+        release.GetProperty("assets").EnumerateArray()
+            .Select(a => (a.GetProperty("name").GetString() ?? throw new ToolException($"GitHub 릴리스 정보에 첨부 파일 이름이 없습니다 ({api})."),
+                          a.GetProperty("browser_download_url").GetString() ?? throw new ToolException($"GitHub 릴리스 정보에 첨부 파일 주소가 없습니다 ({api}).")))
+            .ToList();
+
+    public string? AssetUrl(Func<string, bool> match) => Assets.Where(a => match(a.Name)).Select(a => a.Url).FirstOrDefault();
 }

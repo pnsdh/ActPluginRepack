@@ -1,7 +1,5 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 
@@ -14,7 +12,7 @@ internal static class Thaliak
     // 지역별 기본 게임 패치 저장소
     public static readonly Dictionary<string, string> GameRepo = new(StringComparer.Ordinal)
     {
-        ["global"] = "4e9a232b", ["korean"] = "de199059", ["simplified-chinese"] = "c38effbc",
+        [Region.Global.Name] = "4e9a232b", [Region.Korean.Name] = "de199059", [Region.SimplifiedChinese.Name] = "c38effbc",
     };
 
     // 이 지역의 옛 exe 를 공식 패치 서버에서 받을 수 있는지 (대만판은 안 됨 -> 스냅샷으로 보관)
@@ -43,9 +41,34 @@ internal static class Thaliak
         Log.Note($"[thaliak] {region.Name} {version} exe 받는 중: {url}");
         byte[] exe = DownloadExe(url, path);
         // exe 안의 빌드 날짜가 요청한 버전 날짜와 다르면 엉뚱한 패치를 받았을 수 있다 (같은 날짜의 다른 패치 등)
-        if (BuildDate(exe) is { } built && version.Length >= 10 && built != version[..10])
+        if (BuildDate(exe) is { } built && GameVersion.DatePart(version) is { } date && built != date)
             Log.Warn($"[thaliak] 받은 exe 의 빌드 날짜({built})가 요청한 버전({version})과 다름 - 비교 결과를 확인할 것");
         return path;
+    }
+
+    // 지역들 중 이 버전을 가장 먼저 내려준 시각. 한 지역의 패치 목록을 받지 못해도 나머지로 (모두 못 받았을 때만 실패로)
+    public static DateTime? FirstReleasedAt(IEnumerable<Region> regions, string version)
+    {
+        DateTime? first = null;
+        Exception? failure = null;
+        foreach (var r in regions)
+        {
+            try
+            {
+                if (Thaliak.ReleasedAt(r, version) is { } t && (first == null || t < first)) first = t;
+            }
+            catch (Exception ex) when (Errors.Recoverable(ex)) { failure ??= ex; }
+        }
+        if (first == null && failure != null) throw failure;
+        return first;
+    }
+
+    // 이미 받아 둔 snapshots\<지역>\<버전>\ffxiv_dx11.exe 가 온전하고 서명이 맞으면 그 경로, 아니면 null (받지 않음 —
+    // 작업 폴더를 잠그지 않고 읽기만 할 때)
+    public static string? CachedSnapshotExe(Workspace ws, Region region, string version)
+    {
+        string path = Path.Combine(ws.SnapshotDir(region, version), TargetFile);
+        return Trusted(path) ? path : null;
     }
 
     // 받아 둔 exe 가 온전하고(PE 섹션까지 다 있음) 스퀘어 에닉스 서명이 맞는지 — 서명을 확인하기 전(예전 버전)에 받은 것,
@@ -67,6 +90,11 @@ internal static class Thaliak
         {
             Log.Note($"[thaliak] 받아 둔 exe 를 쓰지 않음 - {ex.Message}");
             ok = false;
+        }
+        catch (Exception ex) when (Errors.IsFileError(ex))
+        {
+            Log.Note($"[thaliak] 받아 둔 exe 를 읽지 못해 쓰지 않음 - {ex.Message}");
+            return false; // 잠깐 잠긴 것일 수 있으니 기억하지 않는다
         }
         return TrustedFiles[key] = ok;
     }
@@ -91,8 +119,7 @@ internal static class Thaliak
         }
         finally
         {
-            try { File.Delete(tmp); } // 옮겼으면 없음 (없는 파일을 지우는 것은 오류가 아니다)
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            Files.TryDeleteFile(tmp); // 옮겼으면 없음
         }
         return exe;
     }
@@ -103,7 +130,7 @@ internal static class Thaliak
     {
         var patches = Patches(RepoOf(region));
         return patches.LastOrDefault(p => p.Version == version).Url
-               ?? patches.LastOrDefault(p => p.Version.Length >= 10 && version.Length >= 10 && p.Version[..10] == version[..10]).Url
+               ?? patches.LastOrDefault(p => GameVersion.DatePart(p.Version) is { } d && d == GameVersion.DatePart(version)).Url
                ?? throw new ToolException($"Thaliak 에 {region.Name} 지역 {version} 버전의 패치가 없습니다.");
     }
 
@@ -123,7 +150,7 @@ internal static class Thaliak
 
     private static byte[] Extract(string url)
     {
-        using var resp = Http.Send(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+        using var resp = Http.Send(url) ?? throw Http.NotFound(url);
         // exe 는 패치 파일 맨 앞에 있어 앞부분(수십 MB)만 받고 멈춘다 (대형 패치의 1.5GB 첫 조각도 34MB 쯤) —
         // 그래도 크기가 들쭉날쭉하니 전체 시간 제한 대신 "60초 동안 데이터 없음"으로 끊는다
         using var s = new BufferedStream(new IdleTimeoutStream(resp.Content.ReadAsStream(), TimeSpan.FromSeconds(60)), 1 << 16);
@@ -178,7 +205,7 @@ internal static class Thaliak
     {
         try
         {
-            var pe = PeImage.Parse(exe, TargetFile);
+            var pe = SigLib.Pe(exe, TargetFile);
             return pe.Sections.All(sec => sec.RawOffset + (long)sec.RawSize <= exe.Length);
         }
         catch (ToolException) { return false; }
@@ -279,7 +306,7 @@ internal static class Thaliak
         Supports(region) ? ReleasedAtOf(Patches(RepoOf(region)).Select(p => (p.Version, p.Offered)), version) : null;
 
     internal static DateTime? ReleasedAtOf(IEnumerable<(string Version, string? Offered)> patches, string version) =>
-        patches.Where(p => p.Offered != null && p.Version.Length >= 15 && version.Length >= 15 && p.Version[..15] == version[..15])
+        patches.Where(p => p.Offered != null && GameVersion.BuildPart(p.Version) is { } b && b == GameVersion.BuildPart(version))
             .Select(p => (DateTime?)DateTime.Parse(p.Offered!, System.Globalization.CultureInfo.InvariantCulture,
                                                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal))
             .Min();
@@ -303,7 +330,7 @@ internal static class Thaliak
     // local 이 latest 보다 앞선 버전인지. 끝자리는 비교하지 않는다 — 예전 패치는 게임 버전과 끝자리가 달랐다
     // (게임 2025.08.07.0000.0000 <- 패치 2025.08.07.0000.0001).
     public static bool IsOlder(string local, string latest) =>
-        local.Length >= 15 && latest.Length >= 15 && string.CompareOrdinal(local[..15], latest[..15]) < 0;
+        GameVersion.BuildPart(local) is { } a && GameVersion.BuildPart(latest) is { } b && string.CompareOrdinal(a, b) < 0;
 
     // 패치 파일을 직접 지정해 받는다 (fetch-exe --patch, 백테스트용)
     public static string PatchUrlByName(Region region, string patch) =>
@@ -311,12 +338,31 @@ internal static class Thaliak
         ?? throw new ToolException($"Thaliak 에 {region.Name} 지역의 {patch} 패치가 없습니다.");
 
     // 저장소의 패치 목록 (버전 문자열, 주소, 지금 내려주는지). 형식이 바뀌었으면 ToolException.
+    // 한 작업(prepare — Http.ConnectionEpoch) 동안, 길어도 몇 분은 받은 목록을 다시 쓴다 — 언어·출처마다 출시 시각을 볼 때
+    // 패치 당일 바쁜 서버에 같은 목록을 수십 번 묻지 않게. 받지 못한 것은 기억하지 않는다.
+    private static readonly Lock PatchesGate = new();
+    // (받기 전에 본 작업 번호를 같이 적는다 — 이전 작업에서 시작한 받기가 새 작업이 시작된 뒤에 끝나도 새 작업에서 쓰지 않게)
+    private static readonly Dictionary<string, (int Epoch, DateTime At, List<(string Version, string Url, bool Active, string? Offered)> List)> PatchesMemo = [];
+
     private static List<(string Version, string Url, bool Active, string? Offered)> Patches(string repo)
+    {
+        int epoch = Http.ConnectionEpoch;
+        lock (PatchesGate)
+        {
+            if (PatchesMemo.TryGetValue(repo, out var m) && m.Epoch == epoch && DateTime.UtcNow - m.At < TimeSpan.FromMinutes(5))
+                return m.List;
+        }
+        var list = FetchPatches(repo);
+        lock (PatchesGate) PatchesMemo[repo] = (epoch, DateTime.UtcNow, list);
+        return list;
+    }
+
+    private static List<(string Version, string Url, bool Active, string? Offered)> FetchPatches(string repo)
     {
         string api = $"https://thaliak.xiv.dev/api/v2beta/repositories/{repo}/patches";
         try
         {
-            using var doc = JsonDocument.Parse(Http.GetStringOrNull(api) ?? throw new ToolException($"서버에서 찾지 못했습니다: {api}"));
+            using var doc = JsonDocument.Parse(Http.GetString(api));
             return doc.RootElement.GetProperty("patches").EnumerateArray()
                 .Select(p => (Version: (p.GetProperty("version_string").GetString()
                                         ?? throw new ToolException($"Thaliak 응답에 버전이 없는 패치가 있습니다 ({api}).")).TrimStart('D', 'H'),
@@ -357,142 +403,5 @@ internal static class Thaliak
             if (r <= 0) throw new EndOfStreamException("ZiPatch 데이터가 중간에 끊겼습니다.");
             n -= r;
         }
-    }
-}
-
-// 게임 exe 가 스퀘어 에닉스가 서명한 진짜 파일인지 (Authenticode). 글로벌·한국·중국판 exe 모두
-// O="SQUARE ENIX CO., LTD." 인증서로 서명되어 있다. 공식 패치 서버의 패치 파일은 http 로 오고 ZiPatch 의 CRC 는
-// 전송 중 깨짐만 잡으므로, 중간에서 바꿔치기한 exe 를 스냅샷으로 남겨 분석·실행하지 않게 한다.
-// 인증서 폐기 확인은 하지 않고 인터넷에서 아무것도 받지 않는다(오프라인에서도 되게). 타임스탬프가 있으면 서명 당시 기준
-// (인증서가 만료된 옛 exe 도 통과).
-internal static class GameExeSignature
-{
-    public const string Publisher = "SQUARE ENIX CO., LTD.";
-
-    // 서명이 맞고 서명한 곳이 스퀘어 에닉스면 그대로, 아니면 ToolException. source: 안내에 쓸 출처.
-    // 파일 이름(확장자)과 상관없이 내용으로 판단한다 (받는 중인 <exe>.tmp 도 확인할 수 있다)
-    public static void VerifyFile(string path, string source)
-    {
-        if (!OperatingSystem.IsWindows()) throw new ToolException("게임 exe 의 서명 확인은 Windows 에서만 됩니다.");
-        string? signer = null;
-        int hr = Check(path, ref signer);
-        if (hr != 0)
-            throw new ToolException($"{source} 에서 받은 exe 에 스퀘어 에닉스의 올바른 서명이 없어 쓰지 않습니다 (0x{hr:X8}). " +
-                                    "받는 도중 내용이 바뀌었을 수 있습니다. 다른 인터넷 연결에서 다시 시도하세요.");
-        if (signer != Publisher)
-            throw new ToolException($"{source} 에서 받은 exe 의 서명자가 스퀘어 에닉스가 아니라 쓰지 않습니다 ({signer ?? "알 수 없음"}).");
-    }
-
-    // WinVerifyTrust 결과(0 = 통과)와 서명 인증서의 O= 값
-    private static int Check(string path, ref string? signer)
-    {
-        IntPtr pathPtr = Marshal.StringToHGlobalUni(path);
-        IntPtr fileInfo = Marshal.AllocHGlobal(Marshal.SizeOf<TrustFileInfo>());
-        try
-        {
-            Marshal.StructureToPtr(new TrustFileInfo { Size = (uint)Marshal.SizeOf<TrustFileInfo>(), FilePath = pathPtr }, fileInfo, false);
-            var data = new TrustData
-            {
-                Size = (uint)Marshal.SizeOf<TrustData>(),
-                UIChoice = 2,             // WTD_UI_NONE
-                RevocationChecks = 0,     // WTD_REVOKE_NONE
-                UnionChoice = 1,          // WTD_CHOICE_FILE
-                File = fileInfo,
-                StateAction = 1,          // WTD_STATEACTION_VERIFY (서명자를 읽은 뒤 CLOSE)
-                ProvFlags = 0x1000 | 0x10, // WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE
-            };
-            var action = GenericVerifyV2;
-            int hr = WinVerifyTrust(IntPtr.Zero, ref action, ref data);
-            try
-            {
-                if (hr == 0) signer = Organization(data.StateData);
-            }
-            finally
-            {
-                data.StateAction = 2; // WTD_STATEACTION_CLOSE
-                WinVerifyTrust(IntPtr.Zero, ref action, ref data);
-            }
-            return hr;
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(fileInfo);
-            Marshal.FreeHGlobal(pathPtr);
-        }
-    }
-
-    // 확인한 서명의 첫 서명자 인증서에서 O= (없으면 null)
-    private static string? Organization(IntPtr state)
-    {
-        IntPtr provider = WTHelperProvDataFromStateData(state);
-        IntPtr sgnr = provider == IntPtr.Zero ? IntPtr.Zero : WTHelperGetProvSignerFromChain(provider, 0, false, 0);
-        IntPtr provCert = sgnr == IntPtr.Zero ? IntPtr.Zero : WTHelperGetProvCertFromChain(sgnr, 0);
-        if (provCert == IntPtr.Zero) return null;
-        IntPtr context = Marshal.ReadIntPtr(provCert, IntPtr.Size); // CRYPT_PROVIDER_CERT.pCert (cbStruct 다음, 포인터 정렬)
-        if (context == IntPtr.Zero) return null;
-        using var cert = new X509Certificate2(context);
-        return cert.SubjectName.EnumerateRelativeDistinguishedNames()
-            .Where(rdn => !rdn.HasMultipleElements && rdn.GetSingleElementType().Value == "2.5.4.10") // O
-            .Select(rdn => rdn.GetSingleElementValue()).FirstOrDefault();
-    }
-
-    private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE"); // WINTRUST_ACTION_GENERIC_VERIFY_V2
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TrustFileInfo // WINTRUST_FILE_INFO
-    {
-        public uint Size;
-        public IntPtr FilePath;
-        public IntPtr File;
-        public IntPtr KnownSubject;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TrustData // WINTRUST_DATA
-    {
-        public uint Size;
-        public IntPtr PolicyCallbackData;
-        public IntPtr SIPClientData;
-        public uint UIChoice;
-        public uint RevocationChecks;
-        public uint UnionChoice;
-        public IntPtr File;
-        public uint StateAction;
-        public IntPtr StateData;
-        public IntPtr URLReference;
-        public uint ProvFlags;
-        public uint UIContext;
-        public IntPtr SignatureSettings;
-    }
-
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern int WinVerifyTrust(IntPtr hwnd, ref Guid action, ref TrustData data);
-
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern IntPtr WTHelperProvDataFromStateData(IntPtr stateData);
-
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern IntPtr WTHelperGetProvSignerFromChain(IntPtr provData, uint signerIndex,
-                                                                [MarshalAs(UnmanagedType.Bool)] bool counterSigner, uint counterSignerIndex);
-
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern IntPtr WTHelperGetProvCertFromChain(IntPtr signer, uint certIndex);
-}
-
-// CRC-32 (IEEE, zlib 과 같음). 이어서 계산할 수 있게 이전 값을 받는다.
-internal static class Crc32
-{
-    private static readonly uint[] Table = Enumerable.Range(0, 256).Select(n =>
-    {
-        uint c = (uint)n;
-        for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
-        return c;
-    }).ToArray();
-
-    public static uint Compute(uint crc, ReadOnlySpan<byte> data)
-    {
-        crc = ~crc;
-        foreach (byte b in data) crc = Table[(crc ^ b) & 0xFF] ^ (crc >> 8);
-        return ~crc;
     }
 }

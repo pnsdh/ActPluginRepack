@@ -89,3 +89,20 @@ public class PluginSignatureTests
         Assert.Equal("48 83", (string)PluginSignatures.OodleLoads(machina, "Global").Single().Load.Operand); // 다른 변형은 그대로
     }
 }
+
+// 리소스를 바꿔도 순서는 그대로 — 플러그인은 override 파일을 리소스 순서대로 읽고 겹치는 키는 나중 것이 이긴다
+public class ResourceOrderTests
+{
+    [Fact]
+    public void ReplacingAResourceKeepsItsPlace()
+    {
+        using var asm = FakeAssembly.Create("Order", new Version(1, 0));
+        var module = asm.MainModule;
+        foreach (string n in new[] { "a", "b", "c" })
+            module.Resources.Add(new Mono.Cecil.EmbeddedResource(n, Mono.Cecil.ManifestResourceAttributes.Public, [1]));
+        var b = module.Resources.Single(r => r.Name == "b");
+        Costura.ReplaceInPlace(module, b, new Mono.Cecil.EmbeddedResource("b", b.Attributes, [2]));
+        Assert.Equal(["a", "b", "c"], module.Resources.Select(r => r.Name));
+        Assert.Equal([2], ((Mono.Cecil.EmbeddedResource)module.Resources[1]).GetResourceData());
+    }
+}

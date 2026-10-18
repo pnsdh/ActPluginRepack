@@ -28,14 +28,7 @@ internal static class SharpVisionRelease
         if (tag != null && url != null && Install(baseDir, tag, url) is { } exe)
         {
             // 이전 버전 폴더 정리 — 다른 프로그램이 잡고 있어 못 지워도 상관없다 (다음에 다시)
-            foreach (string old in Directory.GetDirectories(baseDir).Where(d => !d.Equals(Path.GetDirectoryName(exe), StringComparison.OrdinalIgnoreCase)))
-            {
-                try { Directory.Delete(old, recursive: true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    Log.Note($"[csv] 이전 SharpVision 폴더를 지우지 못함 ({ex.Message}): {old}");
-                }
-            }
+            Files.DeleteOthers(baseDir, Path.GetDirectoryName(exe)!, "csv");
             return exe;
         }
 
@@ -55,24 +48,22 @@ internal static class SharpVisionRelease
         string dir = Path.Combine(baseDir, tag);
         string exe = Path.Combine(dir, "SharpVision.exe");
         if (File.Exists(exe)) return exe;
-        string tmp = dir + ".tmp";
         try
         {
             Log.Note($"[csv] SharpVision {tag} 받는 중: {url}");
-            byte[] zip = Http.GetBytesOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true);
-            ZipFile.ExtractToDirectory(new MemoryStream(zip), tmp);
-            if (!File.Exists(Path.Combine(tmp, "SharpVision.exe")))
-                throw new ToolException($"{url} 안에 SharpVision.exe 가 없습니다.");
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); // exe 만 격리되고 남은 폴더
-            Directory.Move(tmp, dir);
+            byte[] zip = Http.GetBytes(url);
+            // 폴더가 있으면 exe 만 격리되고 남은 것 — 바꿔 넣는다
+            Files.InstallDirectory(dir, tmp =>
+            {
+                ZipFile.ExtractToDirectory(new MemoryStream(zip), tmp);
+                if (!File.Exists(Path.Combine(tmp, "SharpVision.exe")))
+                    throw new ToolException($"{url} 안에 SharpVision.exe 가 없습니다.");
+            });
             return exe;
         }
         catch (Exception ex) when (Errors.Recoverable(ex))
         {
             Log.Warn($"[csv] SharpVision {tag} 를 받지 못함 - {Errors.Describe(ex)}");
-            try { if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             return null;
         }
     }
@@ -104,8 +95,7 @@ internal static class SharpVision
         if (overwrite) args.Add("--overwrite");
 
         Log.Note($"    > {Path.GetFileName(exe)} {string.Join(" ", args.Select(Quote))}");
-        var r = Run(exe, args, Proc.DefaultTimeout, line => Log.Note("      " + line));
-        if (r.Code != 0) throw new ToolException($"SharpVision 이 실패했습니다 (종료 코드 {r.Code}): {Proc.LastLine(r.Stderr + r.Stdout)}");
+        Proc.Check(Run(exe, args, Proc.DefaultTimeout, line => Log.Note("      " + line)), "SharpVision");
     }
 
     // --help 는 sqpack 을 읽지 않고 바로 끝난다.

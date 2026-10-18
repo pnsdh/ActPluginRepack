@@ -7,19 +7,16 @@ internal static class Commands
         var ws = o.Workspace();
         var s = global::Status.Collect(ws);
 
-        // 이름표는 12칸 (한글은 두 칸)
-        static string Line(string label, string text) => "  " + StatusLine.Pad(label, 12) + text;
+        // 이름표는 GUI 의 상태 칸과 같은 칸 수로 (한글은 두 칸)
+        static string Line(string label, string text) => "  " + StatusLine.Format(label, text);
         Log.Section($"[status] {ws.Root}");
-        foreach (var line in s.Describe()) Log.Write(line.Kind, Line(line.Label, line.Text));
-        try
-        {
-            if (GitHub.Query() is { } limit) Log.Info(Line("GitHub API", GitHub.Describe(limit, GitHub.Token?.Source)));
-        }
-        catch (ToolException ex) { Log.Note(Line("GitHub API", $"사용량을 확인하지 못함: {ex.Message}")); }
+        foreach (var line in s.Describe()) Log.Write(line.Kind, "  " + line.Format());
+        var (usageOk, usage) = GitHub.TryDescribeUsage(brief: true);
+        Log.Write(usageOk ? LogKind.Info : LogKind.Note, Line("GitHub API", usage));
         Log.Info(Line("이 도구", AppInfo.DisplayVersion));
         if (AppInfo.CheckForUpdate() is { } update) Log.Warn(Line("새 버전", $"{update.Tag} - {update.Url}"));
         foreach (string a in s.Advice) Log.Done($"=> {a}");
-        return 0;
+        return ExitCodes.Ok;
     }
 
     // 패치본 배포 묶음 (zip + 릴리스 설명). 올리는 건 출력한 gh 명령으로 직접.
@@ -29,10 +26,10 @@ internal static class Commands
         var ws = o.Workspace();
         using var _ = ws.Lock();
         var r = global::HotfixPackage.Create(ws, o.Get("--tag"));
-        Log.Info($"  담은 파일: {string.Join(", ", r.Files)}");
-        Log.Info("  release-notes.md 의 '알려진 문제' 를 확인한 뒤 올리기:");
+        Log.Info($"[hotfix] 담은 파일: {string.Join(", ", r.Files)}");
+        Log.Info("[hotfix] release-notes.md 의 '알려진 문제' 를 확인한 뒤 올리기:");
         Log.Info($"  {r.UploadCommand}");
-        return 0;
+        return ExitCodes.Ok;
     }
 
     // (배포하는 사람용) 자동 업데이트 서명 키 만들기. 공개키는 Core\Infrastructure\UpdateSignature.cs 에 넣는다.
@@ -43,9 +40,9 @@ internal static class Commands
         if (File.Exists(path)) throw new ToolException($"이미 키 파일이 있습니다: {path}. 새로 만들면 이전 키로 서명한 버전과 맞지 않게 되므로 덮어쓰지 않습니다.");
         var (privatePem, publicKey) = UpdateSignature.Generate();
         Files.WriteAtomic(path, privatePem);
-        Log.Done($"[release] 개인키: {path} (저장소에 넣지 말고 따로 백업할 것)");
-        Log.Info($"[release] 공개키 (UpdateSignature.PublicKey 에): {publicKey}");
-        return 0;
+        Log.Done($"[release-keygen] 개인키: {path} (저장소에 넣지 말고 따로 백업할 것)");
+        Log.Info($"[release-keygen] 공개키 (UpdateSignature.PublicKey 에): {publicKey}");
+        return ExitCodes.Ok;
     }
 
     // (배포하는 사람용) 배포 zip 에 서명 -> <zip>.sig (publish.ps1 이 부른다)
@@ -62,8 +59,8 @@ internal static class Commands
         if (!UpdateSignature.Verify(Path.GetFileName(zip), sha, sig))
             throw new ToolException("이 키는 프로그램에 들어 있는 공개키와 짝이 아닙니다. UpdateSignature.PublicKey 를 확인하세요.");
         Files.WriteAtomic(zip + ".sig", sig + "\n");
-        Log.Done($"[release] 서명: {zip}.sig");
-        return 0;
+        Log.Done($"[release-sign] 서명: {zip}.sig");
+        return ExitCodes.Ok;
     }
     // ACT 로그의 RSV(OverlayPlugin 262 줄) -> input\overrides\global_rsv.txt (공식 플러그인에 없는 것만)
     public static int RsvImport(string[] args)
@@ -72,18 +69,19 @@ internal static class Commands
         var ws = o.Workspace();
         int days = o.Get("--days") is { } d ? int.TryParse(d, out int n) && n > 0 ? n : throw new ToolException("--days 에는 1 이상의 정수를 쓰세요.") : Rsv.DefaultDays;
         var files = new List<string>();
-        foreach (string p in o.GetList("--logs").DefaultIfEmpty(Rsv.LogFolder()))
+        string[] logs = o.GetList("--logs") is { Length: > 0 } given ? given : [Rsv.LogFolder()];
+        foreach (string p in logs)
         {
             if (File.Exists(p)) files.Add(Path.GetFullPath(p));
             else if (Directory.Exists(p)) files.AddRange(Rsv.RecentLogs(p, days));
             else throw new ToolException($"로그 파일이나 폴더가 없습니다: {p}");
         }
         if (files.Count == 0)
-            throw new ToolException($"최근 {days}일 안의 ACT 로그가 없습니다 ({string.Join(", ", o.GetList("--logs").DefaultIfEmpty(Rsv.LogFolder()))}). " +
+            throw new ToolException($"최근 {days}일 안의 ACT 로그가 없습니다 ({string.Join(", ", logs)}). " +
                                     "OverlayPlugin 을 켜고 RSV 가 있는 콘텐츠에 들어간 뒤 다시 실행하세요.");
         using var _ = ws.Lock();
         var r = Rsv.Import(ws, files);
-        return r.Conflicts.Count > 0 ? 2 : 0;
+        return r.Conflicts.Count > 0 ? ExitCodes.RsvConflicts : ExitCodes.Ok;
     }
 
     // GitHub API 사용량과 토큰. --token <토큰 | -> 저장 ('-' 면 표준 입력에서 읽음 — 명령 기록에 남지 않게), --clear 삭제
@@ -102,10 +100,10 @@ internal static class Commands
             Log.Done($"[github] 토큰 저장 - 시간당 {saved.Limit}회");
         }
         var current = GitHub.Token;
-        Log.Info($"[github] 토큰: {current?.Source ?? "없음 (시간당 60회)"}" + (GitHub.HasSavedToken ? "  (저장한 토큰 있음)" : ""));
+        Log.Info($"[github] 토큰: {current?.Source ?? $"없음 (시간당 {GitHub.AnonymousLimit}회)"}" + (GitHub.HasSavedToken ? "  (저장한 토큰 있음)" : ""));
         if (GitHub.Query() is { } limit) Log.Info($"[github] 사용량: {GitHub.Describe(limit, current?.Source)}");
         if (current == null) Log.Note($"[github] 권한 없는 토큰이면 충분: {GitHub.TokenPageUrl}");
-        return 0;
+        return ExitCodes.Ok;
     }
 
     // 설치된 게임 클라이언트 찾기. --save 면 지역을 알아낸 것을 config.json 의 clients 로 저장
@@ -115,8 +113,8 @@ internal static class Commands
         var found = ClientLocator.Detect();
         if (found.Count == 0) Log.Warn("[detect] 설치된 게임 클라이언트를 찾지 못함 - config.json 에 직접 적을 것");
         foreach (var c in found)
-            Log.Info($"  {c.Region?.Name ?? "(지역 모름)",-20} {c.Version ?? "?",-22} {c.InstallDir}  ({c.Source})");
-        if (!o.Flag("--save")) return 0;
+            Log.Info($"[detect] {c.Region?.Name ?? "(지역 모름)",-20} {c.Version ?? "?",-22} {c.InstallDir}  ({c.Source})");
+        if (!o.Flag("--save")) return ExitCodes.Ok;
 
         var ws = o.Workspace();
         var known = found.Where(c => c.Region != null).GroupBy(c => c.Region!.Name).ToList();
@@ -124,9 +122,16 @@ internal static class Commands
             Log.Warn($"[detect] {g.Key} 가 여러 개 - 첫 번째를 씀: {g.First().InstallDir}");
         if (known.Count == 0) throw new ToolException("지역을 알아낸 클라이언트가 없어 저장하지 않았습니다.");
         using var _ = ws.Lock();
-        Config.SetClients(ws.Root, known.ToDictionary(g => g.Key, g => g.First().InstallDir));
-        Log.Done($"[detect] {Config.FileName} 의 clients 저장: {string.Join(", ", known.Select(g => g.Key))}");
-        return 0;
+        var clients = known.ToDictionary(g => g.Key, g => g.First().InstallDir, StringComparer.OrdinalIgnoreCase);
+        // 찾지 못한 지역(지역을 알 수 없는 중국·대만판을 손으로 적어 둔 것 등)은 그대로 둔다
+        foreach (var (region, dir) in Config.RawClients(ws.Root).Where(x => !clients.ContainsKey(x.Key)))
+        {
+            clients[region] = dir;
+            Log.Note($"[detect] {region} 은(는) 찾지 못해 적어 둔 경로를 그대로 둠: {dir}");
+        }
+        Config.SetClients(ws.Root, clients);
+        Log.Done($"[detect] {Config.FileName} 의 clients 저장: {string.Join(", ", clients.Keys)}");
+        return ExitCodes.Ok;
     }
 
     public static int Prepare(string[] args)
@@ -153,23 +158,27 @@ internal static class Commands
 
         Log.Info();
         Log.Section("[prepare] 요약");
-        foreach (var step in r.Steps)
-        {
-            string line = $"  {(step.Status == StepStatus.Ok ? "OK" : "!!"),-4} {step.Name,-30} {step.Message}";
-            if (step.Status == StepStatus.Ok) Log.Done(line); else Log.Warn(line);
-        }
+        foreach (var step in r.Steps) Log.Write(step.SummaryKind, step.SummaryLine());
         if (r.PatchNeeded == false) Log.Done($"[prepare] {r.Verdict}");
         else Log.Section($"[prepare] {r.Verdict}");
         if (r.PatchNeeded == true && r.UnconfirmedOpcodes.Count > 0)
-            Log.Warn($"[prepare] {string.Join(", ", r.UnconfirmedOpcodes.Select(x => x.Name))} 의 opcode 는 공개 자료 없이 직접 구한 값입니다 - " +
+            Log.Warn($"[prepare] {string.Join(", ", r.UnconfirmedOpcodes.Select(x => x.Name))} 의 opcode 는 이번 버전 것으로 확인된 공개 자료 없이 정한 값입니다 (직접 구함 또는 확인 안 된 karashiiro) - " +
                      "큰 패치에서는 틀릴 수 있으니 공개되면(보통 몇 시간 안) prepare 를 다시 실행하세요.");
-        if (!r.HooksOk) return 2;
-        if (r.MissingOpcodes.Count > 0)
+        if (r.Outcome == PrepareOutcome.OpcodesMissing)
+            Log.Warn($"[prepare] opcode 를 못 구한 클라이언트: {string.Join(", ", r.MissingOpcodes)} - " +
+                     (r.OpcodeProblem ?? "아직 공개 전일 수 있으니 나중에 다시 실행하세요. 그대로 빌드하면 패킷 해석이 틀릴 수 있음"));
+        // 0 은 "패치본을 만들 차례"일 때만 — 스크립트(build.ps1)가 그대로 빌드·설치해도 되게.
+        // 판단에 필요한 단계를 직접 껐으면(--no-sigcheck / --no-opcodes) 판단이 없어도 실패가 아니다 (예전처럼 0)
+        // (출처에 빠진 항목 때문이면 끈 단계와 상관없는 진짜 판단 불가)
+        bool skipped = (o.Flag("--no-sigcheck") || o.Flag("--no-opcodes")) && r.Verdict != global::Prepare.MissingItemsVerdict;
+        return r.Outcome switch
         {
-            Log.Warn($"[prepare] opcode 를 못 구한 클라이언트: {string.Join(", ", r.MissingOpcodes)} - 그대로 빌드하면 패킷 해석이 틀릴 수 있음");
-            return 3;
-        }
-        return 0;
+            PrepareOutcome.HooksBroken => ExitCodes.HooksBroken,
+            PrepareOutcome.OpcodesMissing => ExitCodes.Incomplete,
+            PrepareOutcome.NotNeeded => ExitCodes.NotNeeded,
+            PrepareOutcome.Undecided => skipped ? ExitCodes.Ok : ExitCodes.Undecided,
+            _ => ExitCodes.Ok,
+        };
     }
 
     public static int Build(string[] args)
@@ -178,7 +187,7 @@ internal static class Commands
         var ws = o.Workspace();
         using var _ = ws.Lock();
         global::Build.Run(ws, new BuildOptions { Plugin = o.Get("--plugin"), Csv = !o.Flag("--no-csv") });
-        return 0;
+        return ExitCodes.Ok;
     }
 
     // ACT 폴더에 쓸 권한이 없으면 관리자 권한으로 다시 실행한다. 대상 폴더는 여기서 미리 정해 넘긴다
@@ -194,7 +203,7 @@ internal static class Commands
             {
                 using var _ = ws.Lock();
                 global::Install.Run(ws, plan);
-                return 0;
+                return ExitCodes.Ok;
             }
             catch (ElevationRequiredException ex) when (o.Get(Elevated.LogOption) == null)
             {
@@ -216,7 +225,7 @@ internal static class Commands
             {
                 using var _ = ws.Lock();
                 global::Install.Restore(ws, backup);
-                return 0;
+                return ExitCodes.Ok;
             }
             catch (ElevationRequiredException ex) when (o.Get(Elevated.LogOption) == null)
             {
@@ -234,22 +243,24 @@ internal static class Commands
             throw new ToolException($"설정된 게임 클라이언트가 없습니다. {Config.FileName} 의 \"clients\" 를 설정하거나 --game <dir> 로 지정하세요.");
         var r = global::Sigcheck.Execute(Path.GetFullPath(o.Get("--plugin") ?? ws.PluginPath),
                                          o.Get("--signatures") ?? ws.SignaturesDir, clients);
-        return r.CriticalOk ? 0 : 2;
+        return r.CriticalOk ? ExitCodes.Ok : ExitCodes.HooksBroken;
     }
 
     public static int Repack(string[] args)
     {
-        var o = Options.Parse(args, ["--root", "--plugin", "--output", "--opcodes", "--overrides", "--data", "--signatures"]);
+        // --out 이 다른 명령과 같은 이름, --output 은 예전 이름 (계속 받는다)
+        var o = Options.Parse(args, ["--root", "--plugin", "--out", "--output", "--opcodes", "--overrides", "--data", "--signatures"]);
+        if (o.Get("--out") != null && o.Get("--output") != null) throw new ToolException("--out 과 --output 은 같은 옵션입니다. 하나만 쓰세요.");
         var ws = o.Workspace();
         using var _ = ws.Lock();
         Repacker.Execute(
             pluginPath: o.Get("--plugin") ?? ws.PluginPath,
-            outputPath: o.Get("--output") ?? ws.OutputPluginPath,
+            outputPath: o.Get("--out") ?? o.Get("--output") ?? ws.OutputPluginPath,
             opcodesDir: StageDir(o, "--opcodes", ws.OpcodesDir),
             overridesDir: StageDir(o, "--overrides", ws.OverridesDir),
             dataDir: StageDir(o, "--data", ws.DataDir),
             signaturesDir: StageDir(o, "--signatures", ws.SignaturesDir));
-        return 0;
+        return ExitCodes.Ok;
     }
 
     // '-' = 명시적 생략. 명시된 폴더가 없으면 에러, 기본 폴더가 없으면 자동 생략(null).
@@ -275,7 +286,7 @@ internal static class Commands
             outDir: o.Get("--out") ?? ws.DataDir,
             lang: o.Get("--lang"),
             o.GetList("--lists") is { Length: > 0 } l ? l : CsvConverter.DefaultLists);
-        return 0;
+        return ExitCodes.Ok;
     }
 
     public static int Export(string[] args)
@@ -284,15 +295,14 @@ internal static class Commands
         var ws = o.Workspace();
         using var _ = ws.Lock();
         Exporter.Export(ws, o.Get("--what", "data"), o.Get("--plugin"), o.Get("--out"), o.GetList("--filter"), o.Flag("--force"));
-        return 0;
+        return ExitCodes.Ok;
     }
 
     // 공식 패치 서버(Thaliak)에서 특정 버전의 ffxiv_dx11.exe 를 snapshots\ 로 받는다
     public static int FetchExe(string[] args)
     {
         var o = Options.Parse(args, ["--root", "--region", "--version", "--patch", "--out"]);
-        var region = Region.Find(o.Get("--region", "global"))
-                     ?? throw new ToolException($"알 수 없는 지역입니다. {string.Join(" / ", Region.All.Select(r => r.Name))} 중 하나를 쓰세요.");
+        var region = o.Region("--region", "global");
         if (o.Get("--patch") is { } patch)
         {
             // 패치 파일 직접 지정 (예전 버전은 패치 이름과 게임 버전이 어긋나서)
@@ -301,57 +311,79 @@ internal static class Commands
             Log.Note($"[fetch-exe] {url}");
             byte[] exe = Thaliak.DownloadExe(url, outPath);
             Log.Done($"[fetch-exe] {outPath} (build {Thaliak.BuildDate(exe) ?? "?"}, {exe.Length:N0} bytes)");
-            return 0;
+            return ExitCodes.Ok;
         }
         if (o.Get("--out") != null)
             throw new ToolException(@"--out 은 --patch 와 함께만 씁니다. --version 으로 받은 exe 는 작업 폴더의 snapshots\ 에 둡니다.");
         var ws = o.Workspace();
         using var _ = ws.Lock();
-        string version = GameVersions.VersionOf(o.Need("--version")) ?? o.Need("--version"); // 패치 번호(7.56h)도 받는다
+        string version = SigCommands.GameVersionArg(o.Need("--version"));
         Log.Done($"[fetch-exe] {Thaliak.SnapshotExe(ws, region, version)}");
-        return 0;
+        return ExitCodes.Ok;
     }
 
-    // 옛 exe 에서 맞던 시그니처를 새 exe 용으로 다시 만든다 (--truth: 정답 시그니처와 같은 곳을 가리키는지 비교)
-    public static int SigRegen(string[] args)
+    // (개발용) 지난 패치 재현: 그 출시를 패치 당일 오전 조건으로 다시 세워 prepare -> build 하고 공식 릴리스(정답)와 비교.
+    // 작업 폴더는 따로(%TEMP% 아래) — 사용자 작업 폴더를 쓰지 않으므로 --root 도 없다. --version 이 없으면 최근 출시 목록만.
+    public static int Replay(string[] args)
     {
-        var o = Options.Parse(args, ["--old", "--new", "--pattern", "--truth"]);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var oldExe = new CodeImage(o.Need("--old"));
-        var newExe = new CodeImage(o.Need("--new"));
-        var r = global::SigRegen.Regenerate(oldExe, newExe, o.Need("--pattern"));
-        Log.Info($"[sigregen] {(r.Pattern ?? "(실패)")}  - {r.Detail} ({sw.Elapsed.TotalSeconds:0.0}s)");
-        if (o.Get("--truth") is not { } truth || r.Pattern == null) return r.Pattern != null ? 0 : 1;
+        var o = Options.Parse(args, ["--version", "--region", "--base", "--ref", "--sources", "--work", "--tools"], ["--keep"]);
+        var region = o.Region("--region", "global");
+        if (o.Get("--version") is not { } version)
+        {
+            Log.Section($"[replay] {region.Name} 최근 출시 (하나를 --version 으로)");
+            foreach (string v in Thaliak.Releases(region).TakeLast(8).Reverse())
+                Log.Info($"  {v}  {Thaliak.ReleasedAt(region, v):yyyy-MM-dd HH:mm} UTC 출시");
+            return ExitCodes.Ok;
+        }
+        var r = global::Replay.Run(new ReplayOptions
+        {
+            Region = region,
+            Version = version,
+            BaseTag = o.Get("--base"),
+            RefTag = o.Get("--ref"),
+            Sources = o.GetList("--sources") is { Length: > 0 } sources ? sources : ReplayOptions.DefaultSources,
+            WorkDir = o.Get("--work"),
+            ToolsDir = o.Get("--tools"),
+            Keep = o.Flag("--keep"),
+        });
+        global::Replay.Report(r);
+        return r.Pass ? ExitCodes.Ok : ExitCodes.Error;
+    }
 
-        static string Where(List<SigPattern.Match> ms) =>
-            string.Join(",", ms.Select(m => m.Saves.Count > 0 ? $"{m.Rva:x}->{m.Saves[0]:x}" : $"{m.Rva:x}..{m.End:x}").Order());
-        var mine = SigPattern.Parse(r.Pattern).Scan(newExe.Target);
-        var want = SigPattern.Parse(truth).Scan(newExe.Target);
-        // 패턴 시작점은 정답과 다를 수 있으니(정답이 다른 곳에서 시작) call 대상, 아니면 시작 또는 끝 위치 집합으로 비교
-        // (후크는 시작, 메모리 시그니처는 패턴 바로 뒤를 읽으므로 끝이 중요)
-        static bool SameSet(IEnumerable<int> x, IEnumerable<int> y) => x.Order().SequenceEqual(y.Order());
-        bool same = mine.Count == want.Count &&
-            (mine.All(m => m.Saves.Count > 0) && want.All(m => m.Saves.Count > 0)
-                ? SameSet(mine.Select(m => m.Saves[0]), want.Select(m => m.Saves[0]))
-                : SameSet(mine.Select(m => m.Rva), want.Select(m => m.Rva)) || SameSet(mine.Select(m => m.End), want.Select(m => m.End)));
-        Log.Info($"[sigregen] 정답: {Where(want)}  /  복구: {Where(mine)}  => {(same ? "일치" : "불일치")}");
-        return same ? 0 : 1;
+    // 문제 보고용 기록 묶음 (GUI 의 [문제 보고용 기록 저장]과 같은 zip). 작업 폴더는 읽기만 하므로 잠그지 않는다.
+    public static int Report(string[] args)
+    {
+        var o = Options.Parse(args, ["--root", "--out"]);
+        var ws = o.Workspace();
+        string name = global::ReportBundle.DefaultName(DateTime.Now);
+        string zip = o.Get("--out") is { } given ? Directory.Exists(given) ? Path.Combine(given, name) : given : name;
+        zip = Path.GetFullPath(zip);
+        var entries = global::ReportBundle.Create(ws, zip);
+        foreach (string entry in entries) Log.Note($"  {entry}");
+        Log.Done($"[report] {zip} ({entries.Count}개 항목)");
+        Log.Info($"[report] 이 파일을 디스코드({AppInfo.DiscordUrl})에 올리고 어떤 문제인지 적어 주세요. " +
+                 "기록에는 이 PC 의 폴더 경로가 들어 있어 Windows 사용자 이름이 보일 수 있습니다.");
+        return ExitCodes.Ok;
     }
 
     // (개발용) 두 exe 의 함수를 명령어 모양 단위로 나란히 비교
     public static int FnDiff(string[] args)
     {
         var o = Options.Parse(args, ["--old", "--new", "--old-rva", "--new-rva"]);
-        var oldExe = new CodeImage(o.Need("--old"));
-        var newExe = new CodeImage(o.Need("--new"));
-        var a = oldExe.FunctionTokens(Convert.ToInt32(o.Need("--old-rva"), 16));
-        var b = newExe.FunctionTokens(Convert.ToInt32(o.Need("--new-rva"), 16));
+        var oldExe = SigLib.Code(o.Need("--old"));
+        var newExe = SigLib.Code(o.Need("--new"));
+        var a = oldExe.FunctionTokens(Rva(o.Need("--old-rva")));
+        var b = newExe.FunctionTokens(Rva(o.Need("--new-rva")));
         Log.Info($"old {a.Length} / new {b.Length} instructions");
         for (int i = 0; i < Math.Max(a.Length, b.Length); i++)
         {
             string x = i < a.Length ? a[i] : "", y = i < b.Length ? b[i] : "";
             Log.Info($"{(x == y ? "  " : "!!")} {i,4} {x,-40} {y}");
         }
-        return 0;
+        return ExitCodes.Ok;
+
+        static int Rva(string s) =>
+            int.TryParse(s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s, System.Globalization.NumberStyles.HexNumber, null, out int v)
+                ? v : throw new ToolException($"RVA 는 16진수입니다: '{s}'");
     }
 }

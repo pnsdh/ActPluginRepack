@@ -39,8 +39,8 @@ internal static class Repacker
         if (plan.Count == 0 && sigs.Count == 0 && memorySigs.Count == 0 && oodleSigs.Count == 0)
             throw new ToolException("넣을 재료가 없습니다. 모든 단계가 비었거나 건너뛰었습니다.");
 
-        Log.Info($"[*] 원본 플러그인: {pluginPath}");
-        Log.Info($"[*] 출력: {outputPath}");
+        Log.Info($"[repack] 원본 플러그인: {pluginPath}");
+        Log.Info($"[repack] 출력: {outputPath}");
 
         string outDir = Path.GetDirectoryName(outputPath)!;
         var sigPlan = sigs.Count > 0
@@ -67,7 +67,7 @@ internal static class Repacker
         foreach (string name in costuraNames)
         {
             var group = plan.Where(i => i.Costura == name).ToList();
-            Log.Info($"[*] -> {name}");
+            Log.Info($"[repack] -> {name}");
             var costura = Costura.Find(plugin, name)
                           ?? throw new ToolException($"리소스가 없습니다: {name}");
 
@@ -91,8 +91,7 @@ internal static class Repacker
 
             byte[] recompressed = Costura.Deflate(rebuilt);
             var attrs = costura.Attributes;
-            plugin.Resources.Remove(costura);
-            plugin.Resources.Add(new EmbeddedResource(name, attrs, recompressed));
+            Costura.ReplaceInPlace(plugin, costura, new EmbeddedResource(name, attrs, recompressed));
             Log.Info($"    = 다시 만듦 {rebuilt.Length} 바이트, 압축 {recompressed.Length} 바이트");
         }
 
@@ -116,10 +115,10 @@ internal static class Repacker
         string? deucalionOut = sigPlan.Deucalion != null ? Path.Combine(outDir, sigPlan.DeucalionName!) : null;
         if (deucalionOut != null) File.WriteAllBytes(deucalionOut + ".tmp", sigPlan.Deucalion!);
         File.Move(pluginTmp, outputPath, overwrite: true);
-        Log.Info($"[+] 씀: {outputPath}");
+        Log.Info($"[repack] 씀: {outputPath}");
         if (deucalionOut == null) return [];
         File.Move(deucalionOut + ".tmp", deucalionOut, overwrite: true);
-        Log.Info($"[+] 씀: {deucalionOut}");
+        Log.Info($"[repack] 씀: {deucalionOut}");
         return [sigPlan.DeucalionName!];
     }
 
@@ -142,7 +141,7 @@ internal static class Repacker
 
     private static SignaturePlan PlanSignatures(ModuleDefinition plugin, string pluginDir, List<Deucalion.Sig> sigs)
     {
-        Log.Info($@"[*] 시그니처 (input\signatures\{SignatureInput.FileName})");
+        Log.Info($@"[repack] 시그니처 (input\signatures\{SignatureInput.FileName})");
         int runtimeCount;
         string? expectedChecksum;
         using (var machina = Costura.ReadInner(plugin, Costura.Machina))
@@ -187,15 +186,16 @@ internal static class Repacker
             return new SignaturePlan(runtimeRecv == null ? null : m => SetRuntimeRecv(m, runtimeRecv), null, null);
 
         // 짝이 안 맞는 deucalion 을 패치하고 체크섬을 맞춰 버리면 플러그인이 맞지 않는 deucalion 을 받아들이게 된다
-        if (expectedChecksum != DeucalionMachina.FormatChecksum(Deucalion.Sha256(original!)))
-            throw new ToolException($"{Path.GetFileName(distrib)} 이(가) 이 플러그인의 deucalion 이 아닙니다 (Machina _checksum 불일치). " +
-                                    @"input\plugin 에는 플러그인과 같은 릴리스의 deucalion 만 두세요.");
-        byte[] hash = Deucalion.Sha256(dll);
-        Log.Info($"    ~ Machina _checksum -> {DeucalionMachina.FormatChecksum(hash)}");
+        if (expectedChecksum == null)
+            throw new ToolException("Machina 에서 deucalion 확인용 _checksum 을 찾지 못했습니다 (플러그인 구조가 바뀐 듯함). " +
+                                    "패킷 후크 시그니처를 deucalion 에 넣을 수 없습니다 — 도구를 업데이트하세요.");
+        DeucalionMachina.CheckPair(expectedChecksum, original!, distrib!);
+        string checksum = DeucalionMachina.ChecksumOf(dll);
+        Log.Info($"    ~ Machina _checksum -> {checksum}");
         return new SignaturePlan(m =>
         {
             if (runtimeRecv != null) SetRuntimeRecv(m, runtimeRecv);
-            DeucalionMachina.SetChecksum(m, hash);
+            DeucalionMachina.SetChecksum(m, checksum);
         }, dll, Path.GetFileName(distrib));
     }
 
@@ -246,8 +246,9 @@ internal static class Repacker
             if (existing != null)
             {
                 int old = existing.GetResourceData().Length;
-                inner.Resources.Remove(existing);
-                inner.Resources.Add(new EmbeddedResource(inj.ResourceName, existing.Attributes, newBytes));
+                // 같은 자리에서 바꾼다 — 플러그인은 override 파일을 리소스 순서대로 읽고 겹치는 키는 나중 것이 이기므로,
+                // 맨 뒤로 옮기면 파일끼리의 우선순위가 바뀐다
+                Costura.ReplaceInPlace(inner, existing, new EmbeddedResource(inj.ResourceName, existing.Attributes, newBytes));
                 if (!quiet) Log.Info($"    ~ {inj.ResourceName}: {old} -> {newBytes.Length} 바이트");
             }
             else if (inj.AllowAdd)
@@ -275,7 +276,7 @@ internal static class Repacker
         if (finalOv.Count == 0) return;
         var names = finalOv.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
         int chg = 0, add = 0;
-        Log.Info($"[*] 플러그인의 이름 override: {names.Count}개");
+        Log.Info($"[repack] 플러그인의 이름 override: {names.Count}개");
         foreach (var n in names)
         {
             string status;
@@ -284,6 +285,6 @@ internal static class Repacker
             else status = "unchanged";
             Log.Info($"      [{status,-9}] {n[Costura.OverridePrefix.Length..]}");
         }
-        Log.Info($"[*] 이름 override: 그대로 {names.Count - chg - add}, 바뀜 {chg}, 추가 {add}");
+        Log.Info($"[repack] 이름 override: 그대로 {names.Count - chg - add}, 바뀜 {chg}, 추가 {add}");
     }
 }

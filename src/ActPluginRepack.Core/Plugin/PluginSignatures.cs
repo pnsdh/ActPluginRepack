@@ -21,8 +21,8 @@ internal static class PluginSignatures
     private const string OodleEnum = "Machina.FFXIV.Memory.SignatureType";
 
     // 클라이언트 지역이 쓰는 변형 (플러그인은 TC 만 따로, Machina 는 한국만 따로)
-    public static string MemoryVariantFor(Region? r) => r?.Name == "traditional-chinese" ? "TraditionalChinese" : "Global";
-    public static string OodleVariantFor(Region? r) => r?.Name == "korean" ? "Korean" : "Global";
+    public static string MemoryVariantFor(Region? r) => r?.Name == Region.TraditionalChinese.Name ? "TraditionalChinese" : "Global";
+    public static string OodleVariantFor(Region? r) => r?.Name == Region.Korean.Name ? "Korean" : "Global";
 
     public static List<GameSig> Read(ModuleDefinition plugin)
     {
@@ -33,12 +33,12 @@ internal static class PluginSignatures
                 var res = Costura.Find(memory, MemoryPrefix + variant + ".txt");
                 if (res == null) continue;
                 foreach (var (name, value) in ParseMemory(Encoding.UTF8.GetString(res.GetResourceData())))
-                    list.Add(new GameSig("memory", variant, name, Spaced(value)));
+                    list.Add(new GameSig(SignatureKinds.Memory, variant, name, Spaced(value)));
             }
         using (var machina = Costura.ReadInner(plugin, Costura.Machina))
             foreach (var (variant, type) in OodleClasses)
                 foreach (var (name, load) in OodleLoads(machina, type))
-                    list.Add(new GameSig("oodle", variant, name, FromOodleFormat((string)load.Operand)));
+                    list.Add(new GameSig(SignatureKinds.Oodle, variant, name, FromOodleFormat((string)load.Operand)));
         return list;
     }
 
@@ -113,8 +113,7 @@ internal static class PluginSignatures
             var (text, unknown) = ApplyMemory(Encoding.UTF8.GetString(res.GetResourceData()), values);
             if (unknown.Count > 0)
                 throw new ToolException($"memory.txt: {variant} 에 없는 시그니처 이름입니다: {string.Join(", ", unknown)}");
-            memory.Resources.Remove(res);
-            memory.Resources.Add(new EmbeddedResource(res.Name, res.Attributes, Encoding.UTF8.GetBytes(text)));
+            Costura.ReplaceInPlace(memory, res, new EmbeddedResource(res.Name, res.Attributes, Encoding.UTF8.GetBytes(text)));
             foreach (var (name, pattern) in values) Log.Info($"    ~ memory {variant}.{name}: {ToMemoryFormat(pattern)}");
         }
     }

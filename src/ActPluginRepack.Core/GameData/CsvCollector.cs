@@ -17,11 +17,11 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
     public void Collect(GameClient client)
     {
         var region = client.Region!;
-        if (Oxidizer() is { } oxidizer)
+        if (OxidizerTool() is { } oxidizer)
         {
             try
             {
-                string cache = global::Oxidizer.ExtractCsv(ws, oxidizer, client, overwrite);
+                string cache = Oxidizer.ExtractCsv(ws, oxidizer, client, overwrite);
                 CopySheets(region, leaf => Path.Combine(cache, leaf));
                 return;
             }
@@ -60,12 +60,12 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
     }
 
     // 필요할 때 한 번만 준비한다 (oxidizer 는 받기+빌드, SharpVision 은 릴리스 받기)
-    private Oxidizer.Tool? Oxidizer()
+    private Oxidizer.Tool? OxidizerTool()
     {
         if (_oxidizerTried) return _oxidizer;
         _oxidizerTried = true;
         if (config.Oxidizer == null || !sources.Contains("oxidizer")) return null;
-        try { _oxidizer = global::Oxidizer.Prepare(ws, config.Oxidizer); }
+        try { _oxidizer = Oxidizer.Prepare(ws, config.Oxidizer); }
         catch (Exception ex) when (Errors.Recoverable(ex)) { Log.Warn($"[csv] xiv-data-oxidizer 를 쓸 수 없음 - {Errors.Describe(ex)}"); }
         return _oxidizer;
     }

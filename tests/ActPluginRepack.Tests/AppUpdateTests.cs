@@ -170,7 +170,37 @@ public class AppUpdateTests
         using (tmp)
         {
             AppUpdate.Apply(staging, app);
-            AppUpdate.Revert(app); // 새 버전을 실행하지 못했을 때
+            Assert.Equal(AppUpdate.RevertResult.Reverted, AppUpdate.Revert(app)); // 새 버전을 실행하지 못했을 때
+            AssertOriginal(app);
+            Assert.Equal(AppUpdate.RevertResult.NothingToRevert, AppUpdate.Revert(app)); // 되돌릴 업데이트가 없음
+        }
+    }
+
+    // 되돌리는 쪽이 실행 중인 새 GUI exe 자신이어도 되돌린다 (실행 중인 exe 는 지울 수 없지만 이름은 바꿀 수 있다 — 비켜 두고
+    // 다음 시작 때 지운다). 실제로 실행 중인 exe 로: 묶음의 GUI exe 자리에 Windows 의 ping 을 넣어 띄워 둔다.
+    [Fact]
+    public void RevertWorksWhileTheNewGuiExeIsRunning()
+    {
+        var (tmp, app, staging) = Setup();
+        using (tmp)
+        {
+            File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), Path.Combine(staging, "ActPluginRepack.Gui.exe"), overwrite: true);
+            AppUpdate.Apply(staging, app);
+            string gui = Path.Combine(app, "ActPluginRepack.Gui.exe");
+            using var running = Process.Start(new ProcessStartInfo(gui, "-n 60 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true })!;
+            try
+            {
+                AppUpdate.Revert(app);
+                Assert.Equal("gui 1", File.ReadAllText(gui));
+                Assert.Equal("cli 1", File.ReadAllText(Path.Combine(app, "cli", "ActPluginRepack.exe")));
+            }
+            finally
+            {
+                running.Kill();
+                running.WaitForExit();
+            }
+            AppUpdate.CleanupOld(app); // 다음 시작: 비켜 둔 exe 를 지운다
+            Assert.Empty(Directory.GetFiles(app, "*.discard-*", SearchOption.AllDirectories));
             AssertOriginal(app);
         }
     }
@@ -185,10 +215,10 @@ public class AppUpdateTests
             AppUpdate.Apply(staging, app);
             string cli = Path.Combine(app, "cli", "ActPluginRepack.exe");
             using (new FileStream(cli, FileMode.Open, FileAccess.Read, FileShare.Read)) // 새 cli 를 지우지 못함
-                AppUpdate.Revert(app);
+                Assert.Equal(AppUpdate.RevertResult.Partial, AppUpdate.Revert(app)); // 다 되돌리지 못했다고 알린다
             Assert.Equal("gui 1", File.ReadAllText(Path.Combine(app, "ActPluginRepack.Gui.exe"))); // GUI 는 이미 되돌림
 
-            AppUpdate.CleanupOld(app); // 다음 시작
+            AppUpdate.FinishInterrupted(app); // 다음 시작 (창을 띄우기 전)
             AssertOriginal(app);
         }
     }

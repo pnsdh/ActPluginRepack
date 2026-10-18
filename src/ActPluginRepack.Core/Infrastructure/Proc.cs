@@ -33,14 +33,19 @@ internal static class Proc
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
         using var p = new Process { StartInfo = psi };
-        p.OutputDataReceived += (_, e) => { if (e.Data == null) return; lock (stdout) stdout.AppendLine(e.Data); onLine?.Invoke(e.Data); };
-        p.ErrorDataReceived += (_, e) => { if (e.Data == null) return; lock (stderr) stderr.AppendLine(e.Data); onLine?.Invoke(e.Data); };
+        bool finished = false; // 출력을 기다리다 그만둔 뒤에 늦게 오는 줄은 버린다 (돌려준 뒤에 진행 표시가 바뀌지 않게)
+        p.OutputDataReceived += (_, e) => { if (e.Data == null || Volatile.Read(ref finished)) return; lock (stdout) stdout.AppendLine(e.Data); onLine?.Invoke(e.Data); };
+        p.ErrorDataReceived += (_, e) => { if (e.Data == null || Volatile.Read(ref finished)) return; lock (stderr) stderr.AppendLine(e.Data); onLine?.Invoke(e.Data); };
         if (!p.Start()) throw new ToolException($"{exe} 실행에 실패했습니다.");
         p.StandardInput.Close();
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
-        WaitOrKill(p, timeout ?? DefaultTimeout, Path.GetFileName(exe));
-        return (p.ExitCode, stdout.ToString(), stderr.ToString());
+        try { WaitOrKill(p, timeout ?? DefaultTimeout, Path.GetFileName(exe)); }
+        finally { Volatile.Write(ref finished, true); }
+        string output, errors;
+        lock (stdout) output = stdout.ToString();
+        lock (stderr) errors = stderr.ToString();
+        return (p.ExitCode, output, errors);
     }
 
     // 끝날 때까지 기다린다. 시간 초과 -> ToolException, 작업 취소 -> OperationCanceledException (둘 다 트리째 종료)
@@ -58,8 +63,20 @@ internal static class Proc
                 throw new ToolException($"{what} 이(가) {timeout.TotalMinutes:0}분 안에 끝나지 않아 중단했습니다.");
             }
         }
-        p.WaitForExit(); // 비동기 출력 읽기 마무리
+        // 비동기 출력 읽기 마무리 (출력 끝까지). 끝난 프로세스가 띄운 하위 프로세스(빌드 서버 등)가 출력 핸들을 물려받아
+        // 살아 있으면 끝이 오지 않으므로 무한정 기다리지 않는다 — 그때는 받은 데까지만 쓴다.
+        try
+        {
+            if (!p.WaitForExitAsync(token).Wait(DrainTimeout))
+                Log.Note($"[proc] {what} 의 출력이 끝나지 않아 (남은 하위 프로세스) 받은 데까지만 씀");
+        }
+        catch (AggregateException ex) when (ex.InnerException is OperationCanceledException)
+        {
+            token.ThrowIfCancellationRequested(); // 기다리는 동안 [취소]
+        }
     }
+
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
 
     public static void Check((int Code, string Stdout, string Stderr) r, string what)
     {

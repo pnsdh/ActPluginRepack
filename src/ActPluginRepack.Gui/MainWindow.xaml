@@ -4,7 +4,8 @@
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  xmlns:vm="clr-namespace:ActPluginRepack.Gui.ViewModels"
                  xmlns:views="clr-namespace:ActPluginRepack.Gui.Views"
-                 Title="FFXIV 플러그인 임시 패치"
+                 xmlns:gui="clr-namespace:ActPluginRepack.Gui"
+                 Title="{x:Static gui:Titles.AppWithVersion}"
                  Icon="pack://application:,,,/Assets/app.ico"
                  Width="960" Height="700" MinWidth="720" MinHeight="560"
                  WindowStartupLocation="CenterScreen"
@@ -18,6 +19,7 @@
         <DataTemplate DataType="{x:Type vm:SetupViewModel}"><views:SetupView /></DataTemplate>
         <DataTemplate DataType="{x:Type vm:AdvancedViewModel}"><views:AdvancedView /></DataTemplate>
         <DataTemplate DataType="{x:Type vm:SettingsViewModel}"><views:SettingsView /></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:HelpViewModel}"><views:HelpView /></DataTemplate>
     </ui:FluentWindow.Resources>
 
     <Grid>
@@ -28,13 +30,13 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="FFXIV 플러그인 임시 패치">
+        <ui:TitleBar Grid.Row="0" Title="{x:Static gui:Titles.AppWithVersion}">
             <ui:TitleBar.Icon>
                 <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico" />
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <!-- 위쪽 막대: 처음으로 / 진행 방식 / 설정 -->
+        <!-- 위쪽 막대: 처음으로 / 진행 방식 / 도움말 / 설정 -->
         <Grid Grid.Row="1" Margin="24,4,24,0" IsEnabled="{Binding CanNavigate}">
             <ui:Button Content="처음으로" Icon="{ui:SymbolIcon Home24}" Appearance="Transparent"
                        Command="{Binding GoHomeCommand}" HorizontalAlignment="Left" />
@@ -42,7 +44,9 @@
                 <TextBlock Text="고급 모드" VerticalAlignment="Center" Margin="0,0,8,0"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                 <ui:ToggleSwitch IsChecked="{Binding IsAdvanced}" Margin="0,0,16,0" AutomationProperties.Name="고급 모드"
-                                 ToolTip="작업을 직접 골라서 실행하는 방식 (익숙한 사용자용)" />
+                                 ToolTip="작업을 직접 골라서 실행합니다 (익숙한 사용자용)." />
+                <ui:Button Content="{x:Static gui:Titles.Help}" Icon="{ui:SymbolIcon QuestionCircle24}" Appearance="Transparent" Margin="0,0,4,0"
+                           Command="{Binding GoHelpCommand}" ToolTip="문제 보고용 기록 저장, 디스코드, 자주 묻는 질문이 있습니다." />
                 <ui:Button Content="설정" Icon="{ui:SymbolIcon Settings24}" Appearance="Transparent"
                            Command="{Binding GoSettingsCommand}" />
             </StackPanel>

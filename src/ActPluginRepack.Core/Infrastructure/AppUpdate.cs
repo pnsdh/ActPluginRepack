@@ -47,23 +47,21 @@ internal static class AppUpdate
         return new Package(update.Version, zip, sha, sig);
     }
 
-    // 받은 업데이트 묶음을 푸는 곳 (%LOCALAPPDATA%\ActPluginRepack\update\<버전>)
-    // 받은 묶음을 풀 곳 (시험은 임시 폴더로 바꾼다)
+    // 받은 업데이트 묶음을 푸는 곳 (%LOCALAPPDATA%\ActPluginRepack\update\<버전>). 시험은 임시 폴더로 바꾼다
     internal static string DownloadsDir { get; set; } = Path.Combine(AppPaths.UserRoot, "update");
 
     // 받아서 확인하고 푼다. 풀린 묶음의 맨 위 폴더(GUI exe 가 있는 곳)를 돌려준다.
     public static string Download(Package pkg, Action<double>? progress = null)
     {
         string dir = Path.Combine(DownloadsDir, pkg.Version.ToString(3));
-        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-        Directory.CreateDirectory(dir);
+        Files.ResetDirectory(dir);
         string zip = Path.Combine(dir, AssetName(pkg.Version));
 
         string expected = (ReadText(pkg.Sha256) ?? throw new ToolException("SHA256 파일을 받지 못했습니다."))
             .Split((char[])[' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant() ?? "";
         if (expected.Length != 64) throw new ToolException("SHA256 파일의 형식이 올바르지 않습니다.");
         Fetch(pkg.Zip, zip, progress);
-        string actual = global::Files.Sha256Of(zip);
+        string actual = Files.Sha256Of(zip);
         if (actual != expected) throw new ToolException("받은 파일이 손상되었습니다 (SHA256 불일치). 다시 시도하세요.");
         // 배포하는 사람의 키로 서명한 묶음인지 (계정·토큰이 털려 zip 과 .sha256 이 함께 바뀐 경우를 막는다)
         string signature = ReadText(pkg.Signature) ?? throw new ToolException("서명 파일을 받지 못했습니다.");
@@ -128,9 +126,10 @@ internal static class AppUpdate
             j.State = Swapping;
             Save(appDir, j);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (Errors.IsFileError(ex))
         {
             if (Undo(appDir, j)) Close(appDir, j.Stale);
+            else TrySave(appDir, j); // 비켜 둔 파일(Stale)도 일지에 — 다음 시작 때 마저 되돌리고 지운다
             throw new ToolException($"새 파일을 복사하지 못했습니다. 아무것도 바꾸지 않았습니다: {ex.Message}");
         }
 
@@ -140,17 +139,18 @@ internal static class AppUpdate
             foreach (string rel in items)
             {
                 string target = Path.Combine(appDir, rel);
-                if (File.Exists(target)) File.Move(target, target + ".old"); // 실행 중인 exe 도 이름은 바꿀 수 있다
-                File.Move(target + ".new", target);
+                if (File.Exists(target)) Move(target, target + ".old"); // 실행 중인 exe 도 이름은 바꿀 수 있다
+                Move(target + ".new", target);
                 Step?.Invoke("swap:" + rel);
             }
             j.State = Applied;
             Save(appDir, j);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (Errors.IsFileError(ex))
         {
             bool clean = Undo(appDir, j);
             if (clean) Close(appDir, j.Stale);
+            else TrySave(appDir, j);
             throw new ToolException(clean ? $"새 파일로 바꾸지 못해 원래대로 되돌렸습니다: {ex.Message}"
                                           : $"새 파일로 바꾸지 못했고 일부는 되돌리지 못했습니다. 프로그램을 다시 시작하면 마저 되돌립니다: {ex.Message}");
         }
@@ -159,21 +159,38 @@ internal static class AppUpdate
     // 받아 둔 업데이트 묶음 지우기 (프로그램이 시작할 때 — 그때는 진행 중인 업데이트가 없다)
     public static void CleanupDownloads()
     {
-        string dir = DownloadsDir;
-        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        Files.DeleteDirectoryQuietly(DownloadsDir);
     }
 
     // 바꿔 넣은 뒤 새 버전을 실행하지 못했을 때: 일지에 적힌 대로 원래 파일로 되돌린다 (새로 생긴 파일은 지움)
-    public static void Revert(string appDir)
+    public enum RevertResult { Reverted, Partial, NothingToRevert }
+
+    // Reverted: 다 되돌림, Partial: 일부만 (다음 시작 때 마저 — FinishInterrupted), NothingToRevert: 되돌릴 업데이트가 없음(일지 없음)
+    public static RevertResult Revert(string appDir)
     {
-        if (Load(appDir) is not { } j) return;
-        if (Undo(appDir, j)) Close(appDir, j.Stale);
-        else if (j.State == Applied)
+        if (Load(appDir) is not { } j) return RevertResult.NothingToRevert;
+        if (Undo(appDir, j))
         {
-            j.State = Swapping; // 못 되돌린 것은 다음 시작 때 마저 (끝난 업데이트로 보고 .old 를 지우지 않게)
-            try { Save(appDir, j); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            Close(appDir, j.Stale);
+            return RevertResult.Reverted;
         }
+        // 못 되돌린 것은 다음 시작 때 마저 (끝난 업데이트로 보고 .old 를 지우지 않게). 비켜 둔 파일(Stale)도 같이 적는다
+        if (j.State == Applied) j.State = Swapping;
+        TrySave(appDir, j);
+        return RevertResult.Partial;
+    }
+
+    // 프로그램이 시작할 때, 창을 띄우기 전에: 도중에 멈추거나 일부만 되돌린 업데이트(일지가 끝남이 아님)를 마저 정리한다
+    // — 옛 파일과 새 파일이 섞인 채로는 창을 만들다 실패할 수 있어 CleanupOld(창이 뜬 뒤)까지 기다리지 않는다.
+    // 끝난 업데이트(.old 정리만 남음)는 건드리지 않는다 (새 버전의 창이 뜬 뒤에 정리 — 뜨지 않으면 그것으로 되돌리므로).
+    public static void FinishInterrupted(string appDir)
+    {
+        if (Load(appDir) is { } j && j.State != Applied) Settle(appDir);
+    }
+
+    private static void TrySave(string appDir, Journal j)
+    {
+        try { Save(appDir, j); } catch (Exception ex) when (Errors.IsFileError(ex)) { }
     }
 
     // 프로그램이 시작할 때: 지난 업데이트가 비켜 둔 .old 를 지우고, 도중에 멈춘 업데이트는 되돌린다. 아직 쓰이는 것은 다음에.
@@ -198,18 +215,13 @@ internal static class AppUpdate
     // .old 들을 지우고 일지를 닫는다. 못 지운 것은 일지에 남겨 다음에 다시.
     private static List<string> Close(string appDir, IEnumerable<string> olds)
     {
-        var left = olds.Distinct(StringComparer.OrdinalIgnoreCase).Where(rel =>
-        {
-            if (Full(appDir, rel) is not { } f) return false;
-            try { if (File.Exists(f)) File.Delete(f); return false; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
-        }).ToList();
+        var left = olds.Distinct(StringComparer.OrdinalIgnoreCase).Where(rel => Full(appDir, rel) is { } f && !Files.TryDeleteFile(f)).ToList();
         try
         {
             if (left.Count == 0) File.Delete(Path.Combine(appDir, JournalFile));
             else Save(appDir, new Journal { State = Applied, Stale = left });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex) when (Errors.IsFileError(ex)) { }
         return left;
     }
 
@@ -225,17 +237,51 @@ internal static class AppUpdate
             {
                 if (j.Replaced.Contains(rel) && File.Exists(old)) // .old 는 복사 단계에서 비웠으므로 있으면 우리가 비켜 둔 것
                 {
-                    if (File.Exists(target)) File.Delete(target);
-                    File.Move(old, target);
+                    if (File.Exists(target)) MoveAside(appDir, j, rel, target);
+                    Move(old, target);
                 }
                 else if (j.Created.Contains(rel) && !File.Exists(fresh) && File.Exists(target)) File.Delete(target); // .new 가 없으면 이미 제자리로 옮긴 것
                 if (File.Exists(fresh)) File.Delete(fresh);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ok = false; }
+            catch (Exception ex) when (Errors.IsFileError(ex)) { ok = false; }
         }
         return ok;
     }
 
+    // 이름 바꾸기. 방금 복사한 파일은 백신이 검사하느라 잠깐 잡고 있을 수 있어(공유 위반) 잠시 뒤 몇 번 더 해 본다.
+    // 그래도 안 되면 어느 파일인지 붙여 알린다.
+    private static void Move(string from, string to)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(from, to);
+                return;
+            }
+            catch (IOException) when (attempt < MoveAttempts && File.Exists(from) && !File.Exists(to))
+            {
+                Thread.Sleep(500);
+            }
+            catch (Exception ex) when (Errors.IsFileError(ex))
+            {
+                throw new IOException($"{Path.GetFileName(from)} -> {Path.GetFileName(to)}: {ex.Message}", ex);
+            }
+        }
+    }
+
+    private const int MoveAttempts = 10; // 약 5초
+
+    // 새 파일을 지우지 않고 다른 이름으로 비켜 둔다 — 실행 중인 exe(되돌리는 쪽이 새 버전 자신일 때)는 지울 수 없지만 이름은
+    // 바꿀 수 있다. 바로 지워 보고, 못 지우면 일지의 Stale 에 남겨 다음 시작 때 지운다.
+    private static void MoveAside(string appDir, Journal j, string rel, string target)
+    {
+        string suffix = $".discard-{Guid.NewGuid():N}.old"; // 일지의 지울 목록은 .old 만 받는다 (Load)
+        Move(target, target + suffix);
+        if (!Files.TryDeleteFile(target + suffix)) j.Stale.Add(rel + suffix);
+    }
+
+    // 바꿔 넣기 일지. 없거나 읽지 못하면 null (진행 중인 업데이트가 없는 것으로)
     private static Journal? Load(string appDir)
     {
         string path = Path.Combine(appDir, JournalFile);
@@ -248,13 +294,11 @@ internal static class AppUpdate
             j.Stale.RemoveAll(rel => !rel.EndsWith(".old", StringComparison.OrdinalIgnoreCase)); // 지우기만 하는 목록이라 .old 만
             return j;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
+        catch (Exception ex) when (ex is JsonException || Errors.IsFileError(ex)) { return null; }
     }
 
     private static void Save(string appDir, Journal j) =>
-        global::Files.WriteAtomic(Path.Combine(appDir, JournalFile), JsonSerializer.Serialize(j, JournalJson));
-
-    private static readonly JsonSerializerOptions JournalJson = new() { WriteIndented = true };
+        Files.WriteAtomic(Path.Combine(appDir, JournalFile), JsonSerializer.Serialize(j, JsonOptions.Indented));
 
     // 일지의 상대 경로 -> 프로그램 폴더 안의 전체 경로 (밖을 가리키면 null — 손댄 일지로 엉뚱한 파일을 건드리지 않게)
     private static string? Full(string appDir, string rel)
@@ -280,7 +324,7 @@ internal static class AppUpdate
         }
         for (int attempt = 1; ; attempt++)
         {
-            using var resp = Http.Send(source) ?? throw new ToolException($"서버에서 찾지 못했습니다: {source}");
+            using var resp = Http.Send(source) ?? throw Http.NotFound(source);
             long? total = resp.Content.Headers.ContentLength;
             using var body = Http.OpenBody(resp);
             using var file = File.Create(dest);

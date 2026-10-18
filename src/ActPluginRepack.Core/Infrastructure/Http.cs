@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 // HTTP GET. 404 면 null, 그 외 실패는 ToolException (네트워크 / 시간 초과 / 요청 제한 안내).
 // api.github.com 요청에는 GitHub 토큰을 붙인다 (GitHub.cs — 비인증 한도는 IP 당 시간당 60회).
 // 현재 작업(Operation)이 취소되면 OperationCanceledException (다시 시도를 기다리는 중에도).
@@ -72,6 +70,13 @@ internal static class Http
         }
         Interlocked.Increment(ref _connectionEpoch);
     }
+
+    // 꼭 있어야 하는 파일: 없으면(404) ToolException
+    public static string GetString(string url) => GetStringOrNull(url) ?? throw NotFound(url);
+    public static byte[] GetBytes(string url) => GetBytesOrNull(url) ?? throw NotFound(url);
+
+    // 서버에 그 주소가 없음 (404) — Send 를 직접 쓰는 쪽도 같은 말로
+    public static ToolException NotFound(string url) => new($"서버에서 찾지 못했습니다: {url}");
 
     public static string? GetStringOrNull(string url) =>
         GetBytesOrNull(url) is { } bytes ? new StreamReader(new MemoryStream(bytes), System.Text.Encoding.UTF8).ReadToEnd() : null;
@@ -183,9 +188,9 @@ internal static class Http
                 resp.Dispose();
                 var limit = GitHub.Last;
                 throw new GitHubLimitException(
-                    $"GitHub API 요청 한도(시간당 {limit?.Limit ?? 60}회)를 다 썼습니다. 한도는 {limit?.Reset.ToLocalTime():HH:mm} 에 초기화됩니다. " +
+                    $"GitHub API 요청 한도(시간당 {limit?.Limit ?? GitHub.AnonymousLimit}회)를 다 썼습니다. 한도는 {limit?.Reset.ToLocalTime():HH:mm} 에 초기화됩니다. " +
                     (limit?.Authenticated == true ? "초기화된 뒤에 다시 실행하세요."
-                        : "초기화된 뒤에 다시 실행하거나, GitHub 토큰을 등록해 한도를 시간당 5000회로 늘리세요."),
+                        : $"초기화된 뒤에 다시 실행하거나, GitHub 토큰을 등록해 한도를 시간당 {GitHub.TokenLimit}회로 늘리세요."),
                     limit?.Reset, limit?.Authenticated == true);
             }
 
@@ -219,15 +224,17 @@ internal static class Http
     // 포기한 까닭 (서버 건너뛰기에 쓴다)
     private enum Cause { Connection, Throttled, ServerError }
 
+    // 막힌 서버를 건너뛸 시간: 서버가 말한 시간(Retry-After)을 1~10분으로, 말하지 않았으면 1분 (GitHub 의 막힘도 같은 규칙)
+    internal static TimeSpan BackOff(TimeSpan? retryAfter) =>
+        TimeSpan.FromTicks(Math.Clamp((retryAfter ?? TimeSpan.FromMinutes(1)).Ticks, TimeSpan.FromMinutes(1).Ticks, TimeSpan.FromMinutes(10).Ticks));
+
     // 포기할 때만 부른다 (다시 시도해서 받았으면 문제 아님). 그 서버(server)를 잠시 건너뛴다 — 인터넷이
     // 끊긴 상태에서 요청마다 7초씩 다시 시도하며 한참 걸리지 않게, 막힌 서버를 계속 두드려 더 오래 막히지 않게.
     // 연결 실패(connection: 서버 묶음)가 서로 다른 묶음 두 곳에서 잇달아 나면(그 사이 어느 서버든 응답이 오면 처음부터
     // 다시 셈) 인터넷이 끊긴 것으로 보고 1분 동안 모든 요청을 바로 실패로 넘긴다.
     private static ToolException Failed(ToolException ex, Cause cause, string server, string? connection = null)
     {
-        var until = DateTime.UtcNow + (ex is ThrottledException { RetryAfter: { } ra }
-            ? TimeSpan.FromTicks(Math.Clamp(ra.Ticks, TimeSpan.FromMinutes(1).Ticks, TimeSpan.FromMinutes(10).Ticks))
-            : TimeSpan.FromMinutes(1));
+        var until = DateTime.UtcNow + BackOff((ex as ThrottledException)?.RetryAfter);
         lock (Down)
         {
             Down[server] = (until, cause);
@@ -315,85 +322,6 @@ internal static class Http
         Log.Note($"[net] {why} - {delay.TotalSeconds:0}초 뒤 다시 시도: {url}");
         if (Operation.Token.WaitHandle.WaitOne(delay)) Operation.Token.ThrowIfCancellationRequested();
     }
-}
-
-// GitHub 의 최신 릴리스 (태그 + 첨부 파일). 플러그인 / SharpVision / deucalion 이 쓴다.
-internal sealed record GitHubRelease(string Repo, string Tag, IReadOnlyList<(string Name, string Url)> Assets)
-{
-    // 릴리스가 없으면 null (API 404, 웹은 릴리스 목록으로 넘어갈 때만). 받지 못하거나 형식이 다르면 ToolException.
-    // 토큰이 있으면 API 먼저, 없으면 웹 페이지 먼저 (GitHub.Fetch).
-    public static GitHubRelease? Latest(string repo) =>
-        GitHub.Fetch($"release:{repo}", $"{repo} 최신 릴리스", () => FromApi(repo, "latest"), () => FromWeb(repo));
-
-    // 태그로 (이 도구의 자동 업데이트 — 최신 릴리스가 아니라 v 태그를 고르므로)
-    public static GitHubRelease? ByTag(string repo, string tag) =>
-        GitHub.Fetch($"release:{repo}:{tag}", $"{repo} 릴리스 {tag}",
-                     () => FromApi(repo, $"tags/{Uri.EscapeDataString(tag)}"), () => FromWebTag(repo, tag));
-
-    // github.com/<repo>/releases/latest 는 최신 태그 페이지로 넘어가고, 첨부 파일 목록은 expanded_assets/<태그> 에 있다.
-    // 넘어가는 주소(Location)만 읽는다 — 태그 페이지 전체를 받지 않게 (IP 를 나눠 쓰면 웹 요청도 막히기 쉽다).
-    // 릴리스가 없다고 확실한 경우(저장소 없음 404, 릴리스 목록 페이지로 넘어감)만 null, 예상과 다르면 ToolException
-    // (GitHub.Fetch 가 API 로 다시 확인하게).
-    private static GitHubRelease? FromWeb(string repo)
-    {
-        string url = $"https://github.com/{repo}/releases/latest";
-        Uri? location;
-        int status;
-        using (var resp = Http.Send(url, redirect: false))
-        {
-            if (resp == null) return null; // 저장소 없음
-            status = (int)resp.StatusCode;
-            location = resp.Headers.Location is { } loc ? new Uri(new Uri(url), loc) : null;
-        }
-        if (location is { Host: "github.com" })
-        {
-            var m = System.Text.RegularExpressions.Regex.Match(location.AbsolutePath, "/releases/tag/(.+)$");
-            if (m.Success) return FromWebTag(repo, Uri.UnescapeDataString(m.Groups[1].Value));
-            if (location.AbsolutePath.TrimEnd('/').Equals($"/{repo}/releases", StringComparison.OrdinalIgnoreCase))
-                return null; // 릴리스가 없으면 목록 페이지로 간다
-        }
-        throw new ToolException($"{url} 이(가) 최신 태그 페이지로 넘어가지 않았습니다 (HTTP {status}{(location != null ? $", {location}" : "")}).");
-    }
-
-    // 그 태그의 릴리스가 없을 때도 404 지만 주소 형식이 바뀌어도 404 라 구분할 수 없다 — ToolException 으로 넘겨 API 가 확인하게
-    private static GitHubRelease FromWebTag(string repo, string tag)
-    {
-        string url = $"https://github.com/{repo}/releases/expanded_assets/{Uri.EscapeDataString(tag)}";
-        string page = Http.GetStringOrNull(url) ?? throw new ToolException($"{tag} 릴리스의 첨부 파일 목록을 찾지 못했습니다 ({url}).");
-        var assets = System.Text.RegularExpressions.Regex
-            .Matches(page, $@"href=""(/{System.Text.RegularExpressions.Regex.Escape(repo)}/releases/download/[^""]+)""",
-                     System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-            .Select(x => System.Net.WebUtility.HtmlDecode(x.Groups[1].Value)).Distinct()
-            .Select(href => (Uri.UnescapeDataString(href[(href.LastIndexOf('/') + 1)..]), "https://github.com" + href))
-            .ToList();
-        if (assets.Count == 0) throw new ToolException($"{tag} 릴리스의 첨부 파일 목록을 읽지 못했습니다 ({url}).");
-        return new GitHubRelease(repo, tag, assets);
-    }
-
-    // which: "latest" 또는 "tags/<태그>"
-    private static GitHubRelease? FromApi(string repo, string which)
-    {
-        string api = $"https://api.github.com/repos/{repo}/releases/{which}";
-        string? json = Http.GetStringOrNull(api);
-        if (json == null) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var assets = root.GetProperty("assets").EnumerateArray()
-                .Select(a => (a.GetProperty("name").GetString() ?? throw new ToolException($"GitHub 릴리스 정보에 첨부 파일 이름이 없습니다 ({api})."),
-                              a.GetProperty("browser_download_url").GetString() ?? throw new ToolException($"GitHub 릴리스 정보에 첨부 파일 주소가 없습니다 ({api}).")))
-                .ToList();
-            return new GitHubRelease(repo, root.GetProperty("tag_name").GetString()
-                                           ?? throw new ToolException($"GitHub 릴리스 정보에 태그가 없습니다 ({api})."), assets);
-        }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
-        {
-            throw new ToolException($"GitHub 릴리스 정보의 형식이 예상과 다릅니다 ({api}): {ex.Message}");
-        }
-    }
-
-    public string? AssetUrl(Func<string, bool> match) => Assets.Where(a => match(a.Name)).Select(a => a.Url).FirstOrDefault();
 }
 
 // 읽기마다 시간 제한: 데이터가 일정 시간 안 오면 IOException (멈춘 다운로드가 영원히 걸리지 않게).

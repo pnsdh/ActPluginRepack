@@ -81,15 +81,14 @@ public class InstallRollbackTests
             string backup = Assert.Single(Directory.GetDirectories(ws.BackupsDir));
             var m = BackupManifest.Load(backup)!;
             Assert.NotNull(m.RestoredAt);
-            Assert.False(m.FailedInstall);
             Assert.Null(Install.LatestBackup(ws));
         }
     }
 
-    // 일부를 되돌리지 못한 설치(FailedInstall)는 "설치한 그 파일인지" 확인 없이 원래 파일로 되돌린다.
-    // 표시가 없으면 같은 상태(플러그인이 넣은 것과 다름)는 "다른 것으로 바뀜"으로 보고 되돌리지 않는다.
+    // 그 뒤로 바뀐 플러그인(해루봇의 업데이트 등)은 덮어쓰지 않는다 — 파일은 통째로 바꾸므로 반쯤 쓴 파일은 없고, 넣은 것도
+    // 원래 것도 아니면 새 것이다. 넣은 것과 원래 것이 섞여 있으면(설치가 도중에 멈춤 등) 되돌린다.
     [Fact]
-    public void FailedInstallFlagLetsRestoreSkipTheHashCheck()
+    public void FailedInstallBackupStillKeepsAReplacedPlugin()
     {
         TestEnv.SkipIfActOrGameRunning();
         var (tmp, ws, plugin) = Setup();
@@ -97,18 +96,40 @@ public class InstallRollbackTests
         {
             var result = Install.Run(ws, Install.Plan(ws, plugin, "-"));
             string pluginFile = Path.Combine(plugin, "FFXIV_ACT_Plugin.dll");
-            File.WriteAllText(pluginFile, "half written");                    // 넣은 것도 원래 것도 아님
 
-            Assert.Null(Install.RestorableBackup(ws));
+            File.WriteAllText(pluginFile, "newer official");                   // 넣은 것도 원래 것도 아님
             Assert.Throws<ToolException>(() => Install.Restore(ws));
+            Assert.Equal("newer official", File.ReadAllText(pluginFile));
 
-            var m = BackupManifest.Load(result.BackupDir)!;
-            (m with { FailedInstall = true }).Save(result.BackupDir);
-            Assert.Equal(result.BackupDir, Install.RestorableBackup(ws));
+            File.WriteAllText(pluginFile, "old official");                     // 플러그인은 아직 원래 것, deucalion 만 바뀐 채 멈춤
+            Assert.Equal(result.BackupDir, Install.LatestBackup(ws));
             Install.Restore(ws);
             Assert.Equal("old official", File.ReadAllText(pluginFile));
             Assert.Equal("old deucalion", File.ReadAllText(Path.Combine(plugin, "deucalion-1.5.0.dll")));
             Assert.False(File.Exists(Path.Combine(plugin, "deucalion-1.5.1.distrib.dll")));
+        }
+    }
+
+    // 패치본 위에 다른 패치본을 설치했으면 restore 한 번은 그 전 패치본까지 (한 번 더 하면 공식본)
+    [Fact]
+    public void RestoreGoesBackOneInstallAtATime()
+    {
+        TestEnv.SkipIfActOrGameRunning();
+        var (tmp, ws, plugin) = Setup();
+        using (tmp)
+        {
+            var act = ActLocator.ResolveTarget([plugin]);
+            Install.Run(ws, Install.Plan(ws, plugin, "-"));
+            File.WriteAllText(Path.Combine(ws.OutputDir, "FFXIV_ACT_Plugin.dll"), "our patch 2");
+            Install.Run(ws, Install.Plan(ws, plugin, "-"));
+
+            Install.Restore(ws);
+            Assert.Equal("our patch", File.ReadAllText(Path.Combine(plugin, "FFXIV_ACT_Plugin.dll")));
+            Assert.True(Install.PatchInstalled(ws, act));                      // 아직 그 전 패치본
+            Install.Restore(ws);
+            Assert.Equal("old official", File.ReadAllText(Path.Combine(plugin, "FFXIV_ACT_Plugin.dll")));
+            Assert.False(Install.PatchInstalled(ws, act));
+            Assert.Null(Install.LatestBackup(ws));
         }
     }
 
@@ -134,19 +155,20 @@ public class InstallRollbackTests
         }
     }
 
-    // 설치한 뒤 플러그인이 다른 것으로 바뀌었으면(해루봇의 업데이트 등) 되돌릴 수 없다 — 관리자 권한을 청하기 전에 알 수 있게
+    // 설치한 뒤 플러그인이 다른 것으로 바뀌었으면(해루봇의 업데이트 등) 되돌리지 않고, 패치본으로도 보지 않는다
     [Fact]
-    public void RestorableBackupIsNullWhenPluginWasReplaced()
+    public void RestoreRefusesWhenPluginWasReplaced()
     {
         TestEnv.SkipIfActOrGameRunning();
         var (tmp, ws, plugin) = Setup();
         using (tmp)
         {
+            var act = ActLocator.ResolveTarget([plugin]);
             var result = Install.Run(ws, Install.Plan(ws, plugin, "-"));
-            Assert.Equal(result.BackupDir, Install.RestorableBackup(ws));
+            Assert.True(Install.PatchInstalled(ws, act));
 
             File.WriteAllText(Path.Combine(plugin, "FFXIV_ACT_Plugin.dll"), "newer official");
-            Assert.Null(Install.RestorableBackup(ws));
+            Assert.False(Install.PatchInstalled(ws, act));
             Assert.Equal(result.BackupDir, Install.LatestBackup(ws));        // 백업은 있지만 되돌리면 안 됨
             var ex = Assert.Throws<ToolException>(() => Install.Restore(ws));
             Assert.Contains("바뀌어", ex.Message);
@@ -164,7 +186,7 @@ public class InstallRollbackTests
         string plugin = tmp.Dir("act/Plugins/FFXIV_ACT_Plugin_KR");
         string installed = tmp.File("act/Plugins/FFXIV_ACT_Plugin_KR/FFXIV_ACT_Plugin.dll", FakeAssembly.WithVersion("FFXIV_ACT_Plugin", "3.0.3.3"));
 
-        var ex = Assert.Throws<ToolException>(() => Install.Plan(ws, plugin, official: true));
+        var ex = Assert.Throws<NewerPluginInstalledException>(() => Install.Plan(ws, plugin, official: true));
         Assert.Contains("더 새 플러그인", ex.Message);
 
         // 같거나 옛 버전이면 공식본 설치 계획 (OverlayPlugin 은 건드리지 않음)
@@ -184,7 +206,7 @@ public class InstallRollbackTests
         string plugin = tmp.Dir("act/Plugins/FFXIV_ACT_Plugin_KR");
         string installed = tmp.File("act/Plugins/FFXIV_ACT_Plugin_KR/FFXIV_ACT_Plugin.dll", FakeAssembly.WithVersion("FFXIV_ACT_Plugin", "3.0.3.3"));
 
-        var ex = Assert.Throws<ToolException>(() => Install.Plan(ws, plugin, "-"));
+        var ex = Assert.Throws<NewerPluginInstalledException>(() => Install.Plan(ws, plugin, "-"));
         Assert.Contains("더 새 플러그인", ex.Message);
 
         // 같은 버전(이 프로그램이 설치한 패치본 포함)이거나 옛 버전이면 설치 계획
@@ -194,7 +216,8 @@ public class InstallRollbackTests
         Assert.False(Install.Plan(ws, plugin, "-").Official);
     }
 
-    // 원본이 읽기 전용이어도 백업 사본은 읽기 전용을 풀어 둔다. 오래된 백업(읽기 전용 파일이 든 예전 백업 포함)은 10개만 남기고 지운다
+    // 원본이 읽기 전용이어도 백업 사본은 읽기 전용을 풀어 둔다. 백업은 최근 10개만 남기고, 이미 되돌린 것부터 지운다
+    // (읽기 전용 파일이 든 예전 백업도)
     [Fact]
     public void BackupsAreWritableAndOldOnesArePruned()
     {
@@ -204,12 +227,13 @@ public class InstallRollbackTests
         {
             string pluginFile = Path.Combine(plugin, "FFXIV_ACT_Plugin.dll");
             File.SetAttributes(pluginFile, FileAttributes.ReadOnly);
-            // 예전 백업 10개 (가장 오래된 것에 읽기 전용 파일)
+            // 예전 백업 10개 (모두 읽기 전용 파일). old-02 는 이미 되돌린 것
             var old = new List<string>();
             for (int i = 1; i <= 10; i++)
             {
                 string d = tmp.Dir($"project/backups/old-{i:00}");
-                new BackupManifest(DateTime.Now.AddDays(-i), "3.0.3.0", [new(plugin, "0", [], [])], null).Save(d);
+                new BackupManifest(DateTime.Now.AddDays(-i), [new(plugin, "0", [], [])], null)
+                    { RestoredAt = i == 2 ? DateTime.Now.AddDays(-1) : null }.Save(d);
                 string f = tmp.File($"project/backups/old-{i:00}/0/FFXIV_ACT_Plugin.dll", "older");
                 File.SetAttributes(f, FileAttributes.ReadOnly);
                 old.Add(d);
@@ -220,11 +244,42 @@ public class InstallRollbackTests
             string copy = Path.Combine(result.BackupDir, "0", "FFXIV_ACT_Plugin.dll");
             Assert.Equal("old official", File.ReadAllText(copy));
             Assert.False(File.GetAttributes(copy).HasFlag(FileAttributes.ReadOnly));
-            Assert.False(Directory.Exists(old[^1]));                           // 가장 오래된 것 (읽기 전용 파일이 있어도)
+            Assert.False(Directory.Exists(old[1]));                            // 되돌린 것 먼저 (더 최근이어도, 읽기 전용 파일이 있어도)
+            Assert.True(Directory.Exists(old[^1]));                            // 가장 오래된 것은 아직 되돌리지 않아 남음
+            Assert.Equal(10, Directory.GetDirectories(ws.BackupsDir).Length);
+
+            // 하나 더 설치하면 되돌리지 않은 것 중 가장 오래된 것을 지운다
+            File.SetAttributes(pluginFile, FileAttributes.Normal);
+            File.WriteAllText(Path.Combine(ws.OutputDir, "FFXIV_ACT_Plugin.dll"), "our patch 2");
+            Install.Run(ws, Install.Plan(ws, plugin, "-"));
+            Assert.False(Directory.Exists(old[^1]));
+            Assert.True(Directory.Exists(result.BackupDir));
             Assert.Equal(10, Directory.GetDirectories(ws.BackupsDir).Length);
 
             foreach (string f in Directory.GetFiles(ws.BackupsDir, "*", SearchOption.AllDirectories))
                 File.SetAttributes(f, FileAttributes.Normal);                  // 임시 폴더 정리용
+        }
+    }
+
+    // 패치본을 여러 번 바꿔 설치해도 백업은 최근 10개만 — 가장 오래된(공식본이 든) 백업도 지운다. restore 는 가장 최근 하나만
+    [Fact]
+    public void PruningKeepsOnlyTheLatestTen()
+    {
+        TestEnv.SkipIfActOrGameRunning();
+        var (tmp, ws, plugin) = Setup();
+        using (tmp)
+        {
+            var first = Install.Run(ws, Install.Plan(ws, plugin, "-")).BackupDir; // 공식본 -> 패치본 1
+            for (int i = 2; i <= 11; i++)
+            {
+                File.WriteAllText(Path.Combine(ws.OutputDir, "FFXIV_ACT_Plugin.dll"), $"our patch {i}");
+                Install.Run(ws, Install.Plan(ws, plugin, "-"));
+            }
+            Assert.False(Directory.Exists(first));
+            Assert.Equal(10, Directory.GetDirectories(ws.BackupsDir).Length);
+
+            Install.Restore(ws);
+            Assert.Equal("our patch 10", File.ReadAllText(Path.Combine(plugin, "FFXIV_ACT_Plugin.dll")));
         }
     }
 

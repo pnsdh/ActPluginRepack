@@ -74,14 +74,8 @@ internal static class Oxidizer
         }
         catch (Exception ex) when (ex is ToolException or System.ComponentModel.Win32Exception) { } // git 없음
         // 수정됐거나 git 이 없으면 yml 내용으로
-        using var sha = System.Security.Cryptography.SHA256.Create();
-        foreach (string f in Directory.GetFiles(schemas, "*.yml").Order(StringComparer.Ordinal))
-        {
-            byte[] b = File.ReadAllBytes(f);
-            sha.TransformBlock(b, 0, b.Length, null, 0);
-        }
-        sha.TransformFinalBlock([], 0, 0);
-        return $"{rev}-{Convert.ToHexString(sha.Hash!)[..8].ToLowerInvariant()}";
+        byte[] all = Directory.GetFiles(schemas, "*.yml").Order(StringComparer.Ordinal).SelectMany(File.ReadAllBytes).ToArray();
+        return $"{rev}-{Files.Sha256Hex(all)[..8]}";
     }
 
     // 이 클라이언트의 필요한 시트를 캐시에 추출하고 캐시 폴더(<캐시>\<leaf>\<시트>.csv)를 돌려준다.
@@ -96,8 +90,10 @@ internal static class Oxidizer
             return cache;
         }
 
+        // 지난 실행이 남긴 작업 폴더 (끝에 못 지운 것) — 여기서 다시 지운다. 아직도 못 지우면 이번 추출은 하지 않는다
         string work = ws.Tool("xiv-data-oxidizer", "work");
-        if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
+        if (!Files.DeleteDirectoryQuietly(work))
+            throw new ToolException($"xiv-data-oxidizer 작업 폴더를 지우지 못했습니다 (백신이 검사 중일 수 있습니다). 잠시 뒤 다시 시도하세요: {work}");
         try
         {
             CopyDirectory(tool.Schemas, Path.Combine(work, "schemas"));
@@ -111,39 +107,33 @@ internal static class Oxidizer
                 .ToList();
             if (failed.Count > 0) throw new ToolException($"xiv-data-oxidizer 가 일부 시트를 추출하지 못했습니다: {string.Join(" / ", failed)}");
 
-            string tmp = cache + ".tmp";
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true);
-            foreach (string leaf in region.CsvLeafs)
+            Files.InstallDirectory(cache, tmp =>
             {
-                string from = Path.Combine(work, "output", LangCode(leaf));
-                Directory.CreateDirectory(Path.Combine(tmp, leaf));
-                foreach (string sheet in CsvConverter.RequiredSheets)
+                foreach (string leaf in region.CsvLeafs)
                 {
-                    string f = Path.Combine(from, sheet + ".csv");
-                    if (!File.Exists(f)) throw new ToolException($"xiv-data-oxidizer 결과에 {LangCode(leaf)}/{sheet}.csv 파일이 없습니다.");
-                    // 스키마가 없는 시트는 머리줄 없이 나온다 — 변환기가 열 이름을 못 찾으므로 여기서 거른다
-                    using (var reader = new StreamReader(f))
-                        if (reader.ReadLine() is not { } header || !header.StartsWith("#,", StringComparison.Ordinal))
-                            throw new ToolException($"xiv-data-oxidizer 결과 {LangCode(leaf)}/{sheet}.csv 에 열 이름이 없습니다 (스키마 없음).");
-                    File.Copy(f, Path.Combine(tmp, leaf, sheet + ".csv"));
+                    string from = Path.Combine(work, "output", LangCode(leaf));
+                    Directory.CreateDirectory(Path.Combine(tmp, leaf));
+                    foreach (string sheet in CsvConverter.RequiredSheets)
+                    {
+                        string f = Path.Combine(from, sheet + ".csv");
+                        if (!File.Exists(f)) throw new ToolException($"xiv-data-oxidizer 결과에 {LangCode(leaf)}/{sheet}.csv 파일이 없습니다.");
+                        // 스키마가 없는 시트는 머리줄 없이 나온다 — 변환기가 열 이름을 못 찾으므로 여기서 거른다
+                        using (var reader = new StreamReader(f))
+                            if (reader.ReadLine() is not { } header || !header.StartsWith("#,", StringComparison.Ordinal))
+                                throw new ToolException($"xiv-data-oxidizer 결과 {LangCode(leaf)}/{sheet}.csv 에 열 이름이 없습니다 (스키마 없음).");
+                        File.Copy(f, Path.Combine(tmp, leaf, sheet + ".csv"));
+                    }
                 }
-            }
-            if (Directory.Exists(cache)) Directory.Delete(cache, recursive: true);
-            Directory.Move(tmp, cache);
+            });
             // 같은 지역의 이전 캐시는 지운다
-            foreach (string old in Directory.GetDirectories(Path.GetDirectoryName(cache)!)
-                         .Where(d => !d.Equals(cache, StringComparison.OrdinalIgnoreCase)))
-                Directory.Delete(old, recursive: true);
+            Files.DeleteOthers(Path.GetDirectoryName(cache)!, cache, "csv");
             return cache;
         }
         finally
         {
-            // 전체 시트 추출본(수백 MB)을 지운다. 백신 검사 중이라 못 지우면 알리고 다음 실행 때 다시 지운다
-            try { if (Directory.Exists(work)) Directory.Delete(work, recursive: true); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
+            // 전체 시트 추출본(수백 MB)을 지운다. 백신 검사 중이라 못 지우면 알리고, 다음 실행이 시작할 때 다시 지운다
+            if (!Files.DeleteDirectoryQuietly(work))
                 Log.Warn($"[csv] 작업 폴더를 지우지 못함 (다음 실행 때 다시 지움): {work}");
-            }
         }
     }
 

@@ -23,6 +23,8 @@ internal static class Deucalion
     private static readonly Regex CreateTargetLabel = new(@"^ *Internal (\w+) sig error", RegexOptions.CultureInvariant);
 
     // input\plugin 의 deucalion 배포본. 플러그인이 시작할 때 *.distrib.dll -> *.dll 로 바꿔 쓴다.
+    // 여러 개면 같은 폴더 플러그인의 Machina _checksum 과 짝인 것 — 공식 3.0.2.3 zip 에는 대만판용 옛 1.2.1 과 다른 서버용 1.5.0 이
+    // 같이 들어 있었다 (사용자). 이 도구가 다루는 한국·글로벌은 _checksum 과 짝인 쪽을 쓴다.
     public static string? FindDistrib(string pluginDir)
     {
         if (!Directory.Exists(pluginDir)) return null;
@@ -31,14 +33,33 @@ internal static class Deucalion
         {
             0 => null,
             1 => found[0],
-            _ => throw new ToolException($"{pluginDir} 에 deucalion distrib dll 이 여러 개 있습니다. 하나만 두세요: " +
-                                         string.Join(", ", found.Select(Path.GetFileName))),
+            _ => Paired(pluginDir, found) ?? throw new ToolException(
+                $"{pluginDir} 에 deucalion distrib dll 이 여러 개 있고, 플러그인과 짝인 것을 가리지 못했습니다. 하나만 두세요: " +
+                string.Join(", ", found.Select(Path.GetFileName))),
         };
+    }
+
+    // 플러그인(같은 폴더의 FFXIV_ACT_Plugin.dll)의 Machina _checksum 과 맞는 하나 (없거나 둘 이상이면 null)
+    private static string? Paired(string pluginDir, string[] found)
+    {
+        string plugin = Path.Combine(pluginDir, PluginRelease.PluginFile);
+        if (!File.Exists(plugin)) return null;
+        try
+        {
+            using var module = Repacker.ReadPlugin(plugin);
+            using var machina = Costura.ReadInner(module, Costura.Machina);
+            if (DeucalionMachina.ReadChecksum(machina) is not { } expected) return null;
+            var hits = found.Where(f => DeucalionMachina.Matches(expected, File.ReadAllBytes(f))).ToList();
+            if (hits.Count != 1) return null;
+            Log.Note($"[deucalion] distrib 이 여러 개 - 플러그인과 짝인 {Path.GetFileName(hits[0])} 을(를) 씀");
+            return hits[0];
+        }
+        catch (Exception ex) when (ex is ToolException || Errors.IsFileError(ex)) { return null; }
     }
 
     public static List<Sig> ReadSignatures(byte[] dll)
     {
-        var pe = PeImage.Parse(dll, "deucalion dll");
+        var pe = SigLib.Pe(dll, "deucalion dll");
         var rustc = pe.Find(".rustc")
                     ?? throw new ToolException("deucalion dll 에 .rustc 섹션이 없어 시그니처 위치를 찾을 수 없습니다.");
         string meta = Encoding.Latin1.GetString(pe.Span(rustc));
@@ -117,7 +138,7 @@ internal static class Deucalion
     {
         var sigs = ReadSignatures(dll);
         byte[] patched = (byte[])dll.Clone();
-        var pe = PeImage.Parse(patched, "deucalion dll");
+        var pe = SigLib.Pe(patched, "deucalion dll");
         var changed = new List<string>();
         foreach (var r in replacements)
         {
@@ -138,7 +159,7 @@ internal static class Deucalion
 
     private static string FitLength(string pattern, int length, string name)
     {
-        SigPattern.Parse(pattern); // 문법 오류는 여기서
+        SigLib.Parse(pattern); // 문법 오류는 여기서
         if (pattern.Length > length) pattern = pattern.Replace(" ", "");
         if (pattern.Length > length)
             throw new ToolException($"'{name}' 시그니처는 공백을 빼도 너무 깁니다 " +
@@ -160,8 +181,6 @@ internal static class Deucalion
         }
         return count;
     }
-
-    public static byte[] Sha256(byte[] data) => SHA256.HashData(data);
 }
 
 // Machina.FFXIV.dll 안의 deucalion 관련 상수 (IL 의 ldstr).
@@ -173,15 +192,28 @@ internal static class DeucalionMachina
     private const string InjectorType = "Machina.FFXIV.Deucalion.DeucalionInjector";
     private const string ClientType = "Machina.FFXIV.Deucalion.DeucalionClient";
 
-    public static string FormatChecksum(byte[] hash) => BitConverter.ToString(hash).ToLowerInvariant();
+    // deucalion dll 내용으로 만든 _checksum 값 (SHA256 을 "32-6b-..." 형식으로 — 16진수 해시와 형식이 다르다)
+    public static string ChecksumOf(byte[] dll) => BitConverter.ToString(SHA256.HashData(dll)).ToLowerInvariant();
 
     public static string? ReadChecksum(ModuleDefinition machina) => ChecksumLoad(machina)?.Operand as string;
 
-    public static void SetChecksum(ModuleDefinition machina, byte[] hash)
+    // deucalion dll 이 Machina 의 _checksum(expected — ReadChecksum 값)과 짝인지
+    public static bool Matches(string? expected, byte[] dll) => expected == ChecksumOf(dll);
+
+    // 짝이 아니면 ToolException — 짝이 안 맞으면 ACT 에서 패킷을 못 받는다. _checksum 을 못 찾았으면(null) 확인하지 않는다.
+    // distrib: 안내에 쓸 deucalion 파일 경로
+    public static void CheckPair(string? expected, byte[] dll, string distrib)
+    {
+        if (expected != null && !Matches(expected, dll))
+            throw new ToolException($"{Path.GetFileName(distrib)} 이(가) 이 플러그인의 deucalion 이 아닙니다 (Machina _checksum 불일치). " +
+                                    $"{Path.GetDirectoryName(distrib)} 에는 플러그인과 같은 릴리스의 deucalion 만 두세요.");
+    }
+
+    public static void SetChecksum(ModuleDefinition machina, string checksum)
     {
         var ins = ChecksumLoad(machina)
                   ?? throw new ToolException($"Machina 에 {InjectorType}._checksum 이 없습니다.");
-        ins.Operand = FormatChecksum(hash);
+        ins.Operand = checksum;
     }
 
     private static Instruction? ChecksumLoad(ModuleDefinition machina)

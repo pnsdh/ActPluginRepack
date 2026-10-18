@@ -1,6 +1,6 @@
 namespace ActPluginRepack.Tests;
 
-// config.json 읽기: 선택 항목의 값 종류와 잘못된 값
+// config.json 읽기: 선택 항목의 값 종류와 잘못된 값 (선택 항목이 틀리면 그 항목만 없는 것으로 보고 SettingErrors 에)
 public class ConfigLoadTests
 {
     private static AppConfig Load(TempDir tmp, string json)
@@ -18,8 +18,12 @@ public class ConfigLoadTests
                      Load(tmp, """{ "oxidizer": "clones/oxidizer", "ida": false }""").Oxidizer);  // 프로젝트 기준 경로
         Assert.Null(Load(tmp, """{ "oxidizer": false, "ida": false }""").Oxidizer);
         Assert.Null(Load(tmp, """{ "ida": false }""").Oxidizer);
-        Assert.Throws<ToolException>(() => Load(tmp, """{ "oxidizer": 1, "ida": false }"""));
-        Assert.Throws<ToolException>(() => Load(tmp, """{ "oxidizer": "  ", "ida": false }"""));
+        foreach (string bad in new[] { """{ "oxidizer": 1, "ida": false }""", """{ "oxidizer": "  ", "ida": false }""" })
+        {
+            var c = Load(tmp, bad);
+            Assert.Null(c.Oxidizer);
+            Assert.Contains("oxidizer", c.SettingErrors.Keys);
+        }
     }
 
     [Theory]
@@ -30,7 +34,9 @@ public class ConfigLoadTests
     public void InvalidIdaTargetIsRejected(string value)
     {
         using var tmp = new TempDir();
-        Assert.Throws<ToolException>(() => Load(tmp, $$"""{ "ida": false, "idaTarget": {{value}} }"""));
+        var c = Load(tmp, $$"""{ "ida": false, "idaTarget": {{value}} }""");
+        Assert.Equal(AppConfig.DefaultIdaTarget, c.IdaTarget);
+        Assert.Contains("idaTarget", c.SettingErrors.Keys);
     }
 
     [Fact]
@@ -48,7 +54,9 @@ public class ConfigLoadTests
     public void LocalDiffMustBeBool(string value)
     {
         using var tmp = new TempDir();
-        Assert.Throws<ToolException>(() => Load(tmp, $$"""{ "ida": false, "localDiff": {{value}} }"""));
+        var c = Load(tmp, $$"""{ "ida": false, "localDiff": {{value}} }""");
+        Assert.True(c.LocalDiff); // 기본값
+        Assert.Contains("localDiff", Assert.Single(c.SettingErrors).Key);
     }
 
     [Fact]
@@ -58,8 +66,26 @@ public class ConfigLoadTests
         var off = Load(tmp, """{ "ida": false }""");
         Assert.Null(off.Ida);
         Assert.False(off.IdaDetected);
-        Assert.Throws<ToolException>(() => Load(tmp, """{ "ida": true }"""));
-        Assert.Throws<ToolException>(() => Load(tmp, """{ "ida": "" }"""));
+        foreach (string bad in new[] { """{ "ida": true }""", """{ "ida": "" }""" })
+        {
+            var c = Load(tmp, bad);
+            Assert.True(c.IdaDetected); // 없는 것처럼 — 자동으로 찾는다
+            Assert.Contains("ida", c.SettingErrors.Keys);
+        }
+    }
+
+    // 손으로 고친 파일에 같은 키가 두 번 있어도 저장한다 (읽기처럼 뒤의 값). 여러 항목은 한 번에
+    [Fact]
+    public void SetToleratesDuplicateKeysAndWritesSeveralAtOnce()
+    {
+        using var tmp = new TempDir();
+        tmp.File("config.json", """{ "ida": false, "localDiff": false, "ida": "C:/IDA", "clients": { "korean": "a", "korean": "b" } }""");
+        Config.Set(tmp.Path, [new("localDiff", null), new("python", System.Text.Json.Nodes.JsonValue.Create("py.exe"))]);
+        var doc = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(tmp.Path, "config.json")))!.AsObject();
+        Assert.Equal("C:/IDA", (string?)doc["ida"]);
+        Assert.Equal("b", (string?)doc["clients"]!["korean"]);
+        Assert.False(doc.ContainsKey("localDiff"));
+        Assert.Equal("py.exe", (string?)doc["python"]);
     }
 
     [Fact]
@@ -115,11 +141,20 @@ public class ConfigLoadTests
     [Theory]
     [InlineData("""{ "clients": [] }""")]                       // 객체가 아님
     [InlineData("""{ "clients": { "mars": "x" } }""")]          // 모르는 지역
-    [InlineData("""{ "sharpVision": false }""")]
     [InlineData("{ broken")]
     public void BadConfigIsToolException(string json)
     {
         using var tmp = new TempDir();
         Assert.Throws<ToolException>(() => Load(tmp, json));
+    }
+
+    [Fact]
+    public void BadToolPathIsIgnoredNotFatal()
+    {
+        using var tmp = new TempDir();
+        var c = Load(tmp, """{ "ida": false, "sharpVision": false, "python": 3 }""");
+        Assert.Null(c.SharpVision);
+        Assert.Null(c.Python);
+        Assert.Equal(["python", "sharpVision"], c.SettingErrors.Keys.Order());
     }
 }

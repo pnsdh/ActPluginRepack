@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- GUI 화면 열기 시험: 화면(XAML)을 모델 없이 만들어 InitializeComponent·배치가 예외 없이 끝나는지.
+       모델은 붙이지 않는다 (실제 작업 폴더와 gui.json 을 읽는다) — 창도 띄우지 않는다. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ActPluginRepack.Gui.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ActPluginRepack.Gui\ActPluginRepack.Gui.csproj" />
+  </ItemGroup>
+
+  <!-- XAML 의 pack://application:,,,/ 는 실행한 exe(여기서는 시험 exe)의 리소스를 가리킨다 — GUI 와 같은 글꼴·아이콘을 같은 경로에.
+       (Application.ResourceAssembly 는 실행 exe 가 있으면 바꿀 수 없다) -->
+  <ItemGroup>
+    <Resource Include="..\..\src\ActPluginRepack.Gui\Fonts\*.otf;..\..\src\ActPluginRepack.Gui\Fonts\*.ttf" Link="Fonts\%(Filename)%(Extension)" />
+    <Resource Include="..\..\src\ActPluginRepack.Gui\Assets\app.ico" Link="Assets\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

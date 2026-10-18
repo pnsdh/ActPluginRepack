@@ -29,16 +29,26 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     public static readonly string[] SourceNames = ["yarukon", "opcodediff", "localdiff", "ida", "karashiiro"];
     private bool Use(string source) => sources.Contains(source);
 
+    // 받은 출처 (버전·패치마다 한 번만 받는다)
     private readonly Dictionary<string, OpcodeSet?> _yarukon = new(StringComparer.Ordinal);
     private Dictionary<string, OpcodeSet>? _karashiiro;
     private readonly Dictionary<string, Dictionary<int, int>?> _opcodediff = new(StringComparer.Ordinal); // 패치 -> diff
     private readonly List<(string Version, OpcodeSet Set)> _derivedSets = []; // 직접 추출(localdiff/IDA) 결과와 그 게임 버전
+    private readonly Dictionary<string, OpcodeSet> _ida = new(StringComparer.OrdinalIgnoreCase); // IDA 작업 폴더 -> 결과
+    private Mono.Cecil.ModuleDefinition? _plugin;
+
+    // 쓴 결과
     private readonly List<ResolvedOpcodes> _resolved = [];
+    private readonly Dictionary<Region, Outcome> _outcomes = [];
     private readonly HashSet<Region> _unconfirmed = [];
+    private readonly HashSet<Region> _unconfirmedCandidates = [];
+
+    // 지금 Collect 하는 클라이언트에서 난 것 (Collect 마다 비운다): 출처를 받지 못한 까닭 / 받기 실패가 아닌 까닭으로 못 쓴 것
+    private readonly List<Exception> _failures = [];
+    private string? _problem;
 
     // 공개 자료 없이 직접 구한 값(로컬 opcodediff / IDA)으로만 정한 지역 — 큰 패치에서는 틀릴 수 있어 공개되면 다시 확인할 것
     public IReadOnlyCollection<Region> Unconfirmed => _unconfirmed;
-    private Mono.Cecil.ModuleDefinition? _plugin;
 
     // 베이스 플러그인을 읽은 Cecil 모듈은 파일을 연 채로 둔다 — 취소·실패해도 닫히게 (Prepare 가 using)
     public void Dispose() => _plugin?.Dispose();
@@ -46,17 +56,40 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     // 지역별 결과: 고른 출처, 베이스 플러그인(Machina 의 <지역>.txt) 대비 값이 바뀐 이름 수, 출처에 없어 베이스 값을
     // 그대로 둔 이름 수. Missing 이 0 이고 Changed 가 0 이어야 "공식 플러그인 opcode 가 그대로 맞음"이다.
     public sealed record Outcome(string Source, int Changed, int Total, int Missing);
-    private readonly Dictionary<Region, Outcome> _outcomes = [];
     public IReadOnlyDictionary<Region, Outcome> Outcomes => _outcomes;
 
-    // 이 클라이언트의 opcode 를 확보해 썼으면 그 결과, 못 구했으면 null
-    public Outcome? Collect(GameClient client)
+    // Collect 의 결과
+    //   Outcome          opcode 를 확보해 썼으면 그 결과, 못 구했으면 null
+    //   DownloadFailure  출처를 받지 못한 까닭 중 사용자에게 알릴 것 (Errors.DownloadFailure). null 이면 출처가 응답은 했는데
+    //                    이번 버전 값이 없음 (아직 공개 전)
+    //   Problem          받기 실패가 아닌 까닭으로 못 쓴 것 (값이 겹침, 설정한 Python 이 없음 등) — "아직 공개 전"이 아님
+    //   Error            도중에 난 예외 (파일 잠금 등 — 단계 실패로 다룬다). 그때까지 모은 DownloadFailure 는 그대로 준다
+    public sealed record CollectResult(Outcome? Outcome, Exception? DownloadFailure, string? Problem, Exception? Error);
+
+    public CollectResult Collect(GameClient client)
     {
         _failures.Clear();
-        var set = Resolve(client.Region!, client, client.Version!);
-        if (set == null || !WriteMachina(client.Region!, set, requireComplete: false)) return null;
-        _resolved.Add(new ResolvedOpcodes(client.Region!, client.Version, set));
-        return _outcomes.GetValueOrDefault(client.Region!);
+        _problem = null;
+        Outcome? outcome = null;
+        Exception? error = null;
+        try
+        {
+            var set = Resolve(client.Region!, client, client.Version!);
+            if (set != null && WriteMachina(client.Region!, set, requireComplete: false))
+            {
+                Written(client.Region!, client.Version, set);
+                outcome = _outcomes.GetValueOrDefault(client.Region!);
+            }
+        }
+        catch (Exception ex) when (Errors.Recoverable(ex)) { error = ex; }
+        return new CollectResult(outcome, Errors.DownloadFailure(_failures), _problem, error);
+    }
+
+    // 썼을 때만 결과로 (쓰기를 거부한 지역을 "직접 구한 값으로 고침"으로 안내하지 않게)
+    private void Written(Region region, string? version, OpcodeSet set)
+    {
+        _resolved.Add(new ResolvedOpcodes(region, version, set));
+        if (_unconfirmedCandidates.Contains(region)) _unconfirmed.Add(region);
     }
 
     // 출처 하나의 실패(네트워크, 도구 없음, 형식 변경)는 그 출처만 건너뛰고 다음 출처로
@@ -70,12 +103,6 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             return null;
         }
     }
-
-    private readonly List<Exception> _failures = [];
-
-    // 마지막 Collect 에서 출처를 받지 못한 까닭 중 사용자에게 알릴 것 (Errors.DownloadFailure). 없으면 null —
-    // 출처가 응답은 했는데 이번 버전 값이 없음 (아직 공개 전)
-    public Exception? DownloadFailure => Errors.DownloadFailure(_failures);
 
     // 패치 번호 대응표가 필요했는데 받지 못했으면 그 까닭도 실패로 (표가 없어 건너뛴 것을 "아직 공개 전"으로 안내하지 않게)
     private void NoteVersionTableFailure()
@@ -92,6 +119,13 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         var written = new List<string>();
         var skipped = new List<string>();
         var configured = config.Clients.Select(c => c.Region!).ToHashSet();
+        // 부가 출력은 이번 것만 남긴다 — 먼저 지워 둬서, 아래에서 실패해 멈춰도 지난 패치 것이 설치·배포되지 않게
+        foreach (string old in new[] { ws.LemegetonPath, ws.OverlayOpcodesPath })
+            try { if (File.Exists(old)) File.Delete(old); }
+            catch (Exception ex) when (Errors.IsFileError(ex))
+            {
+                skipped.Add($@"지난 extras\{Path.GetFileName(old)} 를 지우지 못했습니다 ({ex.Message}). 이번 것을 만들지 못하면 그것이 설치될 수 있습니다.");
+            }
         foreach (var region in Region.All.Where(r => !configured.Contains(r)))
         {
             string? version = region.CnOpcodes ? versionOf(region) : null;
@@ -99,33 +133,47 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             if (!region.CnOpcodes || version != null)
             {
                 Log.Section($"[{region.Name}] ({(outdated.Contains(region) ? "클라이언트가 최신이 아니라 공개 자료만" : "클라이언트 설정 없음")}{(version != null ? $", {version}" : "")})");
-                var set = Resolve(region, client: null, version);
-                if (set != null && WriteMachina(region, set, requireComplete: true))
+                // 한 지역의 실패(파일 잠금, 리소스 없음)가 나머지 지역 처리와 옛 파일 정리를 막지 않게
+                try
                 {
-                    _resolved.Add(new ResolvedOpcodes(region, version, set));
-                    done = true;
+                    var set = Resolve(region, client: null, version);
+                    if (set != null && WriteMachina(region, set, requireComplete: true))
+                    {
+                        Written(region, version, set);
+                        done = true;
+                    }
+                }
+                catch (Exception ex) when (Errors.Recoverable(ex))
+                {
+                    Log.Warn($"[opcode] {region.Name} 실패 - {ex.Message}");
+                    skipped.Add($"{region.Label}: opcode 를 쓰지 못했습니다 ({ex.Message}).");
                 }
             }
             // 이번 값을 못 구했으면 예전 prepare 가 남긴 파일을 지운다 — 옛 값으로 덮지 않고 베이스 플러그인 값을 쓰게
             string stale = Path.Combine(ws.OpcodesDir, region.Opcodes + ".txt");
             if (!done && File.Exists(stale))
             {
-                File.Delete(stale);
-                Log.Note($@"[opcode] input\opcodes\{region.Opcodes}.txt 는 이번 게임 버전 것이 아니라 지움 - {region.Name} 은 베이스 플러그인 값을 씀");
+                try
+                {
+                    File.Delete(stale);
+                    Log.Note($@"[opcode] input\opcodes\{region.Opcodes}.txt 는 이번 게임 버전 것이 아니라 지움 - {region.Name} 은 베이스 플러그인 값을 씀");
+                }
+                catch (Exception ex) when (Errors.IsFileError(ex))
+                {
+                    // 지난 패치 값이 빌드에 들어간다 — 알린다 (다음 지역은 계속)
+                    Log.Warn($@"[opcode] input\opcodes\{region.Opcodes}.txt (지난 게임 버전 것)를 지우지 못함 - {ex.Message}");
+                    skipped.Add($@"input\opcodes\{region.Opcodes}.txt 는 지난 게임 버전 것인데 지우지 못했습니다 ({ex.Message}). 지우고 다시 확인하세요.");
+                }
             }
         }
 
-        // 부가 출력도 이번 것만 남긴다 (만들지 못하면 지난 패치 것이 설치·배포되지 않게)
-        foreach (string old in new[] { ws.LemegetonPath, ws.OverlayOpcodesPath })
-            if (File.Exists(old)) File.Delete(old);
         if (_resolved.Count == 0)
         {
             skipped.Add("opcode 를 하나도 구하지 못해 extras 파일을 만들지 않았습니다.");
             return (written, skipped);
         }
         Log.Info();
-        LemegetonOutput.Write(ws.LemegetonPath, _resolved);
-        written.Add("lemegeton.xml");
+        if (LemegetonOutput.Write(ws.LemegetonPath, _resolved)) written.Add("lemegeton.xml");
         string? template = Try("OverlayPlugin 템플릿", () => Http.GetStringOrNull(OverlayPluginOutput.UpstreamUrl));
         if (template == null)
         {
@@ -157,10 +205,14 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
 
         // 로컬 opcodediff (~5초, 결과는 버전마다 캐시): 클라이언트가 있는 통합 지역이면 항상
         OpcodeSet? localdiff = null;
+        bool pythonMissing = false;
         if (client != null && region.CnOpcodes && config.LocalDiff && Use("localdiff"))
         {
             if (!LocalDiff.HasPython(config.Python))
+            {
                 Log.Warn($"[opcode] 로컬 opcodediff 는 설정한 Python 경로({config.Python})가 없어 건너뜀");
+                pythonMissing = true;
+            }
             else
             {
                 localdiff = Try("로컬 opcodediff", () => LocalOpcodediff(client));
@@ -182,8 +234,12 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         OpcodeSet? primary =
             forceIda ? ida ?? yarukon ?? karashiiroFirst ?? localdiff ?? derived ?? opcodediff ?? karashiiroLast
             : yarukon ?? karashiiroFirst ?? localdiff ?? derived ?? opcodediff ?? ida ?? karashiiroLast;
-        if (primary != null && !published && (primary == localdiff || primary == derived || primary == ida))
-            _unconfirmed.Add(region);
+        // 공개 자료(또는 이번 버전 것으로 확인된 karashiiro) 없이 고친 것 — 공개되면 다시 확인하라고 안내한다
+        if (primary != null && !published && (primary == localdiff || primary == derived || primary == ida || primary == karashiiroLast))
+            _unconfirmedCandidates.Add(region);
+        // 다른 출처로도 못 구했을 때만 원인으로 (공개 전 + 직접 구하기도 못 함)
+        if (primary == null && pythonMissing)
+            _problem ??= $"공개된 정보가 아직 없고, 설정한 Python 경로({config.Python})가 없어 직접 구하지도 못했습니다. 설정에서 Python 경로를 확인하세요.";
         if (primary == null)
         {
             if (client == null)
@@ -219,15 +275,13 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         bool karashiiroAgrees = karashiiro != null && OpcodeNames.Machina.All(m =>
             karashiiro.Server.TryGetValue(m.Name, out int v) && merged.TryGetValue(m.Name, out int w) && v == w);
         string? label = (cn ? GameVersions.RetailOf(version!) : null) ?? (karashiiroAgrees ? karashiiro!.PatchLabel : null);
-        return new OpcodeSet(primary.Source + (filled.Count > 0 ? " +보충" : ""), merged, label);
+        return new OpcodeSet(OpcodeSet.WithFilled(primary.Source, filled.Count > 0), merged, label);
     }
 
     // IDA 직접 추출. 통합 클라이언트(CN/글로벌/한국 — 같은 버전이면 opcode 가 같다)는 기본으로 같은 버전의 중국판 exe 를
     // 분석한다(config "idaTarget"): finder 의 시그니처가 중국판 기준이라 보정 없이 맞고, 한 번 분석한 결과를 다른 지역에도
     // 쓴다. 대상 지역 클라이언트가 설정에 있으면 그 exe, 없으면 공식 패치 서버에서 받는다 (받지 못하면 이 클라이언트 exe 로).
     // 대만판처럼 opcode 가 다른 지역은 그 클라이언트 exe 그대로.
-    private readonly Dictionary<string, OpcodeSet> _ida = new(StringComparer.OrdinalIgnoreCase); // 작업 폴더 -> 결과
-
     // IDA 로 분석할 (지역, exe). download: 공식 패치 서버에서 그 지역·버전의 exe 를 받아 경로를 돌려준다.
     internal static (Region Target, string Exe) IdaTarget(GameClient client, AppConfig config, Func<Region, string, string> download)
     {
@@ -284,7 +338,14 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     {
         var region = client.Region!;
         string version = client.Version!;
-        var olds = Thaliak.EarlierReleases(region, version).Take(LocalDiffReleases).ToList();
+        List<string> olds;
+        try { olds = Thaliak.EarlierReleases(region, version).Take(LocalDiffReleases).ToList(); }
+        catch (Exception ex) when (Errors.Recoverable(ex) && LocalDiff.CachedPrevious(ws, client) is { Count: > 0 } cached)
+        {
+            // 공식 패치 목록을 받지 못해도(패치 당일 Thaliak 이 느림 등) 이 버전에 받아 둔 결과가 있으면 그것으로
+            Log.Note($"[opcode] 공식 패치 목록을 받지 못해 ({Errors.Describe(ex)}) 받아 둔 localdiff 결과로: {string.Join(", ", cached)}");
+            olds = cached.Take(LocalDiffReleases).ToList();
+        }
         if (olds.Count == 0)
         {
             Log.Warn($"[opcode] localdiff: 공식 패치 목록에 {version} 앞의 출시가 없어 생략");
@@ -460,19 +521,20 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     // karashiiro 의 이 지역 원본 파일이 이번 버전이 나온 뒤(Thaliak 이 처음 내려준 시각)에 커밋됐는지. 알 수 없으면 null.
     // 통합 클라이언트(CN/Global/KR)는 같은 버전을 쓰므로 어느 지역에서든 처음 나온 시각 — 한국 서버가 몇 시간 늦게 패치돼도
     // 그 전에 올라온 이번 버전 데이터를 옛 것으로 보지 않게 (7.57: 글로벌 05:51, karashiiro 06:25, 한국 08:15).
-    private static bool? UpdatedSinceRelease(Region region, string version)
+    private bool? UpdatedSinceRelease(Region region, string version)
     {
         if (OpcodeSources.KarashiiroFile(region) is not { } file) return null;
         try
         {
             var regions = region.CnOpcodes ? Region.All.Where(r => r.CnOpcodes) : [region];
-            if (regions.Select(r => Thaliak.ReleasedAt(r, version)).Where(t => t != null).Min() is not { } released) return null;
+            if (Thaliak.FirstReleasedAt(regions, version) is not { } released) return null;
             var commit = GitHub.RecentCommits(OpcodeSources.KarashiiroRepo, "master", file, 1).FirstOrDefault();
             return commit == null ? null : commit.Date >= released;
         }
         catch (Exception ex) when (Errors.Recoverable(ex))
         {
             Log.Note($"[opcode] karashiiro 갱신 시각을 확인하지 못함 - {Errors.Describe(ex)}");
+            _failures.Add(ex); // 못 구했을 때 "아직 공개 전"이 아니라 이 까닭(한도·연결)으로 안내하게
             return null;
         }
     }
@@ -480,7 +542,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     private string BaseText(Region region)
     {
         if (!File.Exists(pluginPath)) throw new ToolException($"플러그인 파일이 없습니다: {pluginPath}");
-        _plugin ??= Mono.Cecil.ModuleDefinition.ReadModule(pluginPath);
+        _plugin ??= Repacker.ReadPlugin(pluginPath);
         return MachinaOpcodes.ReadBase(_plugin, region.Opcodes);
     }
 
@@ -513,6 +575,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         if (dup.Count > 0)
         {
             Log.Warn($"[opcode] {set.Source}: 서로 다른 이름이 같은 opcode 를 가리킴 - {rel} 생략 ({string.Join(", ", dup)})");
+            _problem ??= $"구한 opcode({set.Source})에서 서로 다른 항목이 같은 값을 가리켜 쓰지 않았습니다. 출처의 값이 잘못되었을 수 있습니다.";
             return false;
         }
 

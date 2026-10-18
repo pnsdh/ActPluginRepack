@@ -84,7 +84,6 @@ internal sealed class VisibleConverter : IValueConverter
         {
             null => false,
             bool b => b,
-            int n => n > 0,
             string s => s.Length > 0,
             ResultKind k => k != ResultKind.None,
             _ => true,

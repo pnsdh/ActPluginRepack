@@ -45,6 +45,18 @@ public class CsvConverterTests
         Assert.Throws<ToolException>(() => CsvConverter.Convert(csv, outDir, null, ["Action"])); // UTF-8 아님
         Assert.False(File.Exists(Path.Combine(outDir, "ActionList_Korean.txt")));
     }
+
+    // 서버 목록: 새로 만든 목록에 없는 id(공식 플러그인에만 있는 대만 서버 등)는 남기고 id 순으로
+    [Fact]
+    public void KeepsIdsOnlyInTheBaseList()
+    {
+        using var tmp = new TempDir();
+        string path = tmp.File("WorldList_English.txt", "21|Ravana\r\n4030|NewName\r\n");
+        CsvConverter.KeepMissingIds(path, "4028|伊弗利特\n21|Ravana\n4030|OldName\n");
+        Assert.Equal(["21|Ravana", "4028|伊弗利特", "4030|NewName"], File.ReadAllLines(path));
+        CsvConverter.KeepMissingIds(path, null); // 베이스를 읽지 못함 -> 그대로
+        Assert.Equal(3, File.ReadAllLines(path).Length);
+    }
 }
 
 public class MachinaOpcodesTests

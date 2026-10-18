@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ActPluginRepack.Core\ActPluginRepack.Core.csproj" />
+    <Using Include="FFXIV.Signatures" />
   </ItemGroup>
 
 </Project>

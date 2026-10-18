@@ -7,11 +7,12 @@ internal sealed record ResolvedOpcodes(Region Region, string? GameVersion, Opcod
 // Lemegeton blueprint — Yarukon ffxiv_opcode_finder / update_lemegeton.py 와 같은 형식.
 internal static class LemegetonOutput
 {
-    public static void Write(string path, IEnumerable<ResolvedOpcodes> resolved)
+    // 쓸 지역(Lemegeton 대상, 게임 버전을 앎)이 없으면 쓰지 않고 false
+    public static bool Write(string path, IEnumerable<ResolvedOpcodes> resolved)
     {
         var regions = resolved.Where(r => r.Region.Lemegeton != null && r.GameVersion != null)
             .OrderBy(r => Array.IndexOf(Region.All, r.Region)).ToList(); // Global, CN, KR
-        if (regions.Count == 0) return;
+        if (regions.Count == 0) return false;
 
         var sb = new StringBuilder();
         sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Blueprint>\r\n\t<Regions>\r\n");
@@ -31,6 +32,7 @@ internal static class LemegetonOutput
 
         Files.WriteAtomic(path, sb.ToString());
         Log.Info($"[lemegeton] {path} ({string.Join(", ", regions.Select(r => r.Region.Lemegeton))})");
+        return true;
     }
 }
 
@@ -53,7 +55,7 @@ internal static class OverlayPluginOutput
         int open = FirstBraceOutsideComment(template);
         string header = template[..open];
         var blocks = SliceTopLevel(template, open); // 지역 이름 -> 원문 블록 ("    \"Global\": {...}")
-        using var doc = JsonDocument.Parse(template, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+        using var doc = JsonDocument.Parse(template, JsonOptions.Comments);
 
         var parts = new List<string>();
         var regionNames = blocks.Select(b => b.Name).Concat(updates.Keys.Where(k => blocks.All(b => b.Name != k)));

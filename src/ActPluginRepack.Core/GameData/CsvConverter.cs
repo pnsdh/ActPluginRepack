@@ -97,7 +97,7 @@ internal static class CsvConverter
                     throw new ToolException($"알 수 없는 리스트입니다: '{list}'");
             }
         }
-        Log.Info($"[done] 언어={lang}");
+        Log.Info($"[csv] 완료 언어={lang}");
     }
 
     // "#" -> 지정 컬럼. 빈 값(선택적으로 id 0도) 제외. hex 면 id 를 소문자 16진수로.
@@ -183,6 +183,22 @@ internal static class CsvConverter
         return id;
     }
 
+    // 새로 만든 "id|이름" 목록에 없는 id 를 baseText(공식 플러그인의 같은 목록)에서 가져와 남긴다 (10진수 id 순).
+    // 서버 목록은 글로벌 클라이언트의 World 로 만드는데, 공식 플러그인에는 다른 지역(대만 등) 서버도 들어 있다.
+    public static void KeepMissingIds(string path, string? baseText)
+    {
+        if (baseText == null || !File.Exists(path)) return;
+        static string Id(string line) => line[..Math.Max(0, line.IndexOf('|'))];
+        var lines = File.ReadAllLines(path, Encoding.UTF8).Where(l => l.Length > 0).ToList();
+        var have = lines.Select(Id).ToHashSet(StringComparer.Ordinal);
+        var extra = baseText.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.IndexOf('|') > 0 && !have.Contains(Id(l))).Distinct().ToList();
+        if (extra.Count == 0) return;
+        Log.Note($"[csv] {Path.GetFileName(path)}: 공식 플러그인에만 있는 {extra.Count}개(다른 지역 서버 등)는 남김");
+        var all = lines.Concat(extra)
+            .OrderBy(l => uint.TryParse(Id(l), NumberStyles.Integer, CultureInfo.InvariantCulture, out uint v) ? v : uint.MaxValue).ToList();
+        File.WriteAllText(path, string.Join("\r\n", all) + "\r\n", new UTF8Encoding(false));
+    }
+
     private static void WriteList(string outDir, string name, List<string> lines)
     {
         // 0건 리스트를 넣으면 그 언어의 이름이 통째로 사라진다 (잘린 CSV, 다른 언어 클라이언트 등)
@@ -193,7 +209,7 @@ internal static class CsvConverter
         Directory.CreateDirectory(outDir);
         string outPath = Path.Combine(outDir, name);
         File.WriteAllText(outPath, string.Join("\r\n", lines) + "\r\n", new UTF8Encoding(false));
-        Log.Info($"  [+] {name} : {lines.Count}개 -> {outPath}");
+        Log.Info($"[csv] {name} : {lines.Count}개 -> {outPath}");
     }
 
     private sealed record Csv(string Path, Dictionary<string, int> Index, List<string[]> Rows)

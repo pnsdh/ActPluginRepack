@@ -9,6 +9,9 @@ internal static class ElevatedRunner
 {
     public const string LogOption = "--log";
 
+    // 관리자 권한으로 다시 실행하기 직전에 보이는 안내 (CLI 와 GUI 가 "<까닭> - " 뒤에 붙인다)
+    public const string RelaunchNote = "관리자 권한으로 다시 실행 (Windows 의 확인 창에서 '예')";
+
     // 프로세스 시작 (시험에서 확인 창의 '아니요' 등을 흉내 낼 때 바꾼다)
     internal static Func<ProcessStartInfo, Process?> Start = Process.Start;
 
@@ -65,7 +68,7 @@ internal static class ElevatedRunner
         {
             reporter.Log(LogKind.Error, $"error: {Errors.Describe(ex)}");
             if (ex is not (ToolException or OperationCanceledException)) reporter.Crash(ex.ToString());
-            return ex is AppsRunningException ? 4 : 1;
+            return ExitCodes.Of(ex);
         }
     }
 
@@ -94,10 +97,10 @@ internal static class ElevatedRunner
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex) when (Errors.IsFileError(ex)) { }
         finally
         {
-            try { File.Delete(log); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            Files.TryDeleteFile(log);
         }
     }
 

@@ -1,7 +1,8 @@
 ﻿<UserControl x:Class="ActPluginRepack.Gui.Views.AdvancedView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:gui="clr-namespace:ActPluginRepack.Gui">
     <!-- 고급 모드의 문구는 합니다체 -->
     <UserControl.Resources>
         <!-- 꺼진 항목에도 설명이 뜨게, 조금 오래 보이게 -->
@@ -30,19 +31,25 @@
             <RowDefinition Height="2*" MinHeight="110" />
         </Grid.RowDefinitions>
 
-        <!-- 머리: 제목 + 실행 버튼들 -->
-        <Grid Margin="0,0,0,8">
-            <TextBlock Text="작업 선택" Style="{StaticResource PageTitle}" VerticalAlignment="Center" Margin="0" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <ui:Button Content="선택 초기화" Icon="{ui:SymbolIcon ArrowReset24}" Appearance="Transparent"
-                           Command="{Binding ResetDefaultsCommand}" ToolTip="이 화면의 작업 선택, 옵션, 데이터 소스를 처음 상태로 돌립니다. 파일은 건드리지 않습니다." />
-                <ui:Button Content="설치 전으로 되돌리기" Icon="{ui:SymbolIcon History24}" Margin="8,0,0,0"
-                           Command="{Binding RestoreCommand}" ToolTip="ACT 에 설치한 패치본을 지우고, 아직 되돌리지 않은 가장 최근 install 직전의 플러그인 파일을 backups\ 에서 복원합니다. 설치한 뒤로 ACT 의 플러그인이 다른 것으로 바뀌었으면(해루봇의 플러그인 업데이트 등) 옛 버전으로 내려가므로 되돌리지 않습니다." />
-                <ui:Button Content="선택한 작업 실행" Appearance="Primary" Icon="{ui:SymbolIcon Play24}" Margin="8,0,0,0" Padding="18,6"
-                           Command="{Binding RunCommand}" ToolTipService.ShowOnDisabled="True"
-                           ToolTip="체크한 작업을 prepare → rsv → build → install → hotfix 순서로 실행합니다. hotfix 는 설치를 막지 않도록 맨 뒤에 하고, 실패해도 결과에만 알립니다. 작업을 하나도 고르지 않으면 누를 수 없습니다." />
-            </StackPanel>
-        </Grid>
+        <!-- 머리: 제목 + 실행 버튼들 (+ 버튼을 눌렀지만 막힌 이유) -->
+        <StackPanel Margin="0,0,0,8">
+            <Grid>
+                <TextBlock Text="작업 선택" Style="{StaticResource PageTitle}" VerticalAlignment="Center" Margin="0" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <ui:Button Content="선택 초기화" Icon="{ui:SymbolIcon ArrowReset24}" Appearance="Transparent"
+                               Command="{Binding ResetDefaultsCommand}" ToolTip="이 화면의 작업 선택, 옵션, 데이터 소스를 처음 상태로 돌립니다. 파일은 건드리지 않습니다." />
+                    <ui:Button Content="{x:Static gui:Titles.Restore}" Icon="{ui:SymbolIcon ArrowUndo24}" Margin="8,0,0,0"
+                               Command="{Binding RestoreCommand}" ToolTip="고친 플러그인 대신 input\plugin 의 공식 플러그인(마지막 확인 때 받은 최신본)을 ACT 에 설치합니다 (install --official 과 같음). ACT 에 더 새 플러그인이 있으면 설치하지 않습니다. 설치 직전 상태로 되돌리려면 명령줄의 restore 를 쓰세요." />
+                    <ui:Button Content="선택한 작업 실행" Appearance="Primary" Icon="{ui:SymbolIcon Play24}" Margin="8,0,0,0" Padding="18,6"
+                               Command="{Binding RunCommand}" ToolTipService.ShowOnDisabled="True"
+                               ToolTip="체크한 작업을 prepare → rsv → build → install → hotfix 순서로 실행합니다. hotfix 는 설치를 막지 않도록 맨 뒤에 하고, 실패해도 결과에만 알립니다. 작업을 하나도 고르지 않으면 누를 수 없습니다." />
+                </StackPanel>
+            </Grid>
+            <!-- 설치·되돌리기 전에 ACT·게임이 켜져 있으면 넘어가지 않고 여기에 알린다 (없으면 숨김) -->
+            <TextBlock Text="{Binding Notice, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,6,0,0"
+                       Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                       Visibility="{Binding Notice, Converter={StaticResource Visible}}" />
+        </StackPanel>
 
         <!-- 작업과 옵션: 두 열 -->
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -55,7 +62,7 @@
 
                 <ui:Card VerticalAlignment="Top" Padding="16,12">
                     <StackPanel>
-                        <TextBlock Text="입력 데이터 준비 (prepare)" Style="{StaticResource Headline}" FontSize="15" Margin="0,0,0,6" />
+                        <TextBlock Text="입력 데이터 준비 (prepare)" Style="{StaticResource CardTitle}" Margin="0,0,0,6" />
                         <CheckBox Content="공식 플러그인 최신 버전 받기" IsChecked="{Binding UpdatePlugin}"
                                   ToolTip="패치의 바탕(base)이 되는 공식 플러그인(ravahn/FFXIV_ACT_Plugin)을 최신 GitHub 릴리스와 비교해, input\plugin 의 것이 오래됐으면 받아서 교체합니다. 이전 파일은 input\plugin\_backup 에 보관합니다." />
                         <CheckBox Content="시그니처 점검" IsChecked="{Binding Sigcheck}"
@@ -92,28 +99,28 @@
                 <StackPanel Grid.Column="2">
                     <ui:Card Padding="16,12">
                         <StackPanel>
-                            <TextBlock Text="빌드 / 설치" Style="{StaticResource Headline}" FontSize="15" Margin="0,0,0,6" />
+                            <TextBlock Text="빌드 / 설치" Style="{StaticResource CardTitle}" Margin="0,0,0,6" />
                             <CheckBox Content="ACT 로그에서 RSV 가져오기 (rsv)" IsChecked="{Binding DoRsv}"
                                       ToolTip="새 레이드의 스킬 이름처럼 서버가 가려서 보내는 이름(RSV)을 ACT 로그에서 모아 input\overrides\global_rsv.txt 에 넣습니다. OverlayPlugin 이 켜진 채로 그 콘텐츠에 들어가면 로그에 262 줄로 남습니다.&#10;&#10;· 읽는 곳: FFXIV 플러그인 설정의 로그 폴더(없으면 ACT 설정)에서 최근 30일 로그&#10;· 공식 플러그인에 같은 값으로 이미 있는 이름은 넣지 않습니다. 플러그인은 한 파일 안에 같은 이름이 두 번 있으면 그 파일과 뒤의 이름 파일을 모두 무시하므로, 이 파일에는 한 번씩만 씁니다.&#10;· 공식 플러그인이나 직접 넣은 파일과 값이 다른 것은 넣지 않고 알립니다.&#10;· 공식 플러그인에 나중에 들어간 이름은 다음에 가져올 때 이 파일에서 정리합니다." />
                             <CheckBox Content="패치 플러그인 빌드 (build)" IsChecked="{Binding DoBuild}"
                                       ToolTip="input\ 의 데이터(opcode, 시그니처, 이름 목록, 오버라이드)를 넣은 플러그인을 output\ 에 만듭니다. prepare 이후 게임이 다시 패치됐으면 알려 줍니다." />
                             <CheckBox Content="CSV 다시 변환" IsChecked="{Binding BuildCsv}" Margin="22,1,0,1" IsEnabled="{Binding DoBuild}"
                                       ToolTip="input\csv 를 data\ 의 이름 목록으로 다시 변환합니다. 끄면 마지막 변환 결과를 그대로 씁니다." />
-                            <CheckBox Content="패치본 배포 묶음 만들기 (hotfix)" IsChecked="{Binding DoHotfix}"
+                            <CheckBox Content="고친 플러그인 배포 묶음 만들기 (hotfix)" IsChecked="{Binding DoHotfix}"
                                       Visibility="{Binding ShowHotfix, Converter={StaticResource Visible}}"
-                                      ToolTip="빌드 결과를 FFXIV_ACT_Plugin_HotFix 릴리스용 zip 과 릴리스 설명(release-notes.md)으로 작업 폴더의 hotfix\&lt;패치&gt;\ 에 만듭니다. 게임·플러그인 버전, opcode 출처, 교체한 시그니처를 기록에서 채우고 출처마다 링크를 겁니다. 올리는 gh 명령은 자세한 기록에 남깁니다. prepare 이후 게임이 다시 패치됐으면 만들지 않습니다." />
+                                      ToolTip="빌드 결과를 FFXIV_ACT_Plugin_HotFix 릴리스용 zip 과 릴리스 설명(release-notes.md)으로 작업 폴더의 hotfix\&lt;패치&gt;\ 에 만듭니다. 게임·플러그인 버전, opcode 출처, 교체한 시그니처를 기록에서 채우고 출처마다 링크를 겁니다. 올리는 gh 명령은 진행 화면의 [자세한 기록]에 남깁니다. prepare 이후 게임이 다시 패치됐으면 만들지 않습니다." />
                             <CheckBox Content="ACT 에 설치 (install)" IsChecked="{Binding DoInstall}"
                                       ToolTip="output\ 의 플러그인을 ACT 의 FFXIV 플러그인 폴더에, extras 의 OverlayPlugin opcode 를 OverlayPlugin 에 넣습니다. 원래 파일은 backups\ 에 남습니다. ACT 와 게임을 종료해야 하며, 필요하면 관리자 권한 확인 창이 뜹니다." />
                             <CheckBox Content="OverlayPlugin opcode 도 넣기" IsChecked="{Binding InstallOverlay}" Margin="22,1,0,1" IsEnabled="{Binding InstallOverlayEnabled}"
                                       ToolTip="extras\OverlayPlugin\opcodes.jsonc 를 OverlayPlugin 의 resources 폴더에도 넣습니다(원래 파일은 백업). 끄면 FFXIV 플러그인만 바꿉니다. 해루봇은 시작할 때마다 이 파일을 OverlayPlugin 배포본으로 되돌리므로, 해루봇 사용자에게는 ACT 를 직접 실행할 때만 효과가 있습니다." />
-                            <CheckBox Content="패치본 대신 공식 최신본 설치" IsChecked="{Binding InstallOfficial}" Margin="22,1,0,1" IsEnabled="{Binding DoInstall}"
-                                      ToolTip="output\ 의 패치본 대신 input\plugin 의 공식 최신본(prepare 가 받아 둔 것)을 ACT 에 설치합니다. 공식 플러그인이 이미 지금 게임과 맞을 때 씁니다. OverlayPlugin 은 건드리지 않고, ACT 에 더 새 버전이 있으면 낮추지 않습니다." />
+                            <CheckBox Content="고친 플러그인 대신 공식 최신본 설치" IsChecked="{Binding InstallOfficial}" Margin="22,1,0,1" IsEnabled="{Binding DoInstall}"
+                                      ToolTip="output\ 의 고친 플러그인 대신 input\plugin 의 공식 최신본(prepare 가 받아 둔 것)을 ACT 에 설치합니다. 공식 플러그인이 이미 지금 게임과 맞을 때 씁니다. OverlayPlugin 은 건드리지 않고, ACT 에 더 새 버전이 있으면 낮추지 않습니다." />
                         </StackPanel>
                     </ui:Card>
 
                     <ui:Card Padding="16,12" Margin="0,12,0,0">
                         <StackPanel>
-                            <TextBlock Text="데이터 소스" Style="{StaticResource Headline}" FontSize="15" />
+                            <TextBlock Text="데이터 소스" Style="{StaticResource CardTitle}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,6"
                                        Text="{Binding Source='끈 소스는 쓰지 않습니다. 한 분류(opcode / CSV / 시그니처)를 모두 끄면 그 분류는 제한 없이 씁니다. 목록은 우선순위 순서입니다.', Converter={StaticResource KeepAll}}" />
                             <ItemsControl ItemsSource="{Binding Sources}">
@@ -154,7 +161,7 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="현재 상태" Style="{StaticResource Headline}" FontSize="15" VerticalAlignment="Center" />
+                <TextBlock Text="현재 상태" Style="{StaticResource CardTitle}" VerticalAlignment="Center" />
                 <!-- 확인하지 못한 이유(주소 포함)는 길 수 있다: 한 줄로 줄이고 전체는 마우스를 올리면 -->
                 <TextBlock Grid.Column="1" Text="{Binding GitHubText}" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="16,0,8,0"
                            HorizontalAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding GitHubTip}" />
@@ -163,13 +170,11 @@
                                AutomationProperties.Name="GitHub 토큰 설정" Command="{Binding OpenSettingsCommand}" />
                     <ui:Button Icon="{ui:SymbolIcon FolderOpen24}" Appearance="Transparent" ToolTip="작업 폴더를 엽니다."
                                AutomationProperties.Name="작업 폴더 열기" Command="{Binding OpenWorkspaceCommand}" />
-                    <ui:Button Icon="{ui:SymbolIcon ArrowClockwise24}" Appearance="Transparent" ToolTip="상태를 다시 읽습니다."
+                    <ui:Button Icon="{ui:SymbolIcon ArrowClockwise24}" Appearance="Transparent" ToolTip="새로 고침: 상태를 다시 읽습니다."
                                AutomationProperties.Name="상태 새로 고침" Command="{Binding RefreshStatusCommand}" />
                 </StackPanel>
             </Grid>
-            <Border Grid.Row="1" CornerRadius="8" Padding="14,10"
-                    Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            <Border Grid.Row="1" Padding="14,10" Style="{StaticResource MonoPanel}">
                 <!-- WPF-UI 의 스크롤바는 내용 위에 겹쳐 그려진다 — 막대가 놓일 자리만큼 보이는 영역을 줄여 글자와 겹치지 않게 -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="0,0,18,18">
                     <TextBlock Text="{Binding StatusText}" Style="{StaticResource Mono}" TextWrapping="NoWrap"

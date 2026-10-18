@@ -23,22 +23,22 @@ internal static class Elevation
         {
             if (Directory.Exists(dir))
                 foreach (string old in Directory.GetFiles(dir, ".actrepack-write-test-*"))
-                    try { File.Delete(old); } catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { }
+                    Files.TryDeleteFile(old);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { }
+        catch (Exception ex) when (Errors.IsFileError(ex)) { }
         string probe = Path.Combine(dir, $".actrepack-write-test-{Environment.ProcessId}-{Guid.NewGuid():N}");
         try
         {
             File.WriteAllBytes(probe, []);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        catch (Exception ex) when (Errors.IsFileError(ex))
         {
             return false;
         }
         for (int i = 0; i < 4; i++) // 지우기는 몇 번 시도만 (남아도 빈 파일 하나)
         {
-            try { File.Delete(probe); break; }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { Thread.Sleep(50); }
+            if (Files.TryDeleteFile(probe)) break;
+            Thread.Sleep(50);
         }
         return true;
     }
@@ -50,11 +50,4 @@ internal static class Elevation
         if (!IsElevated) throw new ElevationRequiredException(dir);
         throw new ToolException($"관리자 권한으로 실행했는데도 {dir} 에 쓸 수 없습니다. 파일이 잠겨 있거나 백신이 막고 있을 수 있습니다.");
     }
-}
-
-// 이 폴더에 쓰려면 관리자 권한으로 다시 실행해야 함
-internal sealed class ElevationRequiredException(string dir)
-    : Exception($"{dir} 에 쓰려면 관리자 권한이 필요합니다 (ACT 가 Program Files 안에 있는 경우)")
-{
-    public string Directory { get; } = dir;
 }

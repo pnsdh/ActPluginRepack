@@ -4,10 +4,13 @@ namespace ActPluginRepack.Gui;
 
 public partial class MainWindow
 {
-    public MainWindow()
+    public MainWindow() : this(attachModel: true) { }
+
+    // attachModel=false: 화면만 만든다 (화면 열기 시험 — 모델은 실제 작업 폴더와 gui.json 을 읽는다)
+    internal MainWindow(bool attachModel)
     {
         InitializeComponent();
-        DataContext = new MainViewModel();
+        if (attachModel) DataContext = new MainViewModel();
         Closing += OnClosing;
         Activated += OnActivated;
     }
@@ -28,7 +31,7 @@ public partial class MainWindow
             : main.Update.Updating ? "업데이트가 끝날 때까지 기다리세요." : null;
         if (reason == null) return;
         e.Cancel = true;
-        System.Windows.MessageBox.Show(this, reason, "FFXIV 플러그인 임시 패치",
+        System.Windows.MessageBox.Show(this, reason, Titles.App,
                                        System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
     }
 }

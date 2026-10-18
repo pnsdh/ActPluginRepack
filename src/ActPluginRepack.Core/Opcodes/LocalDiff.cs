@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 // xivdev/opcodediff 를 로컬에서 실행해 직전 버전 -> 이번 버전 opcode 대응표를 만든다 (기본 켜짐, config "localDiff": false 로 끔).
@@ -34,20 +33,32 @@ internal static class LocalDiff
         string work = Path.Combine(ws.SnapshotDir(region, client.Version!), "localdiff", previous);
         string cache = Path.Combine(work, "diff.json");
         string what = $"localdiff {region.Name} {previous} -> {client.Version}";
-        if (!overwrite && File.Exists(cache))
-        {
-            Log.Note($"[opcode] localdiff 결과 캐시 사용: {cache}");
-            return OpcodeSources.ParseDiff(File.ReadAllText(cache), what);
-        }
+        // 스크립트는 저장소 최신본을 쓴다 — 메이저 패치 당일에 고쳐지는 일이 잦으므로, 바뀌었으면 캐시를 쓰지 않고 다시 돌린다
+        // (받기는 ETag 로 바뀌었는지만 묻는다. 해시를 남기기 전에 만든 결과도 다시 돌린다). 받지 못하면(오프라인 등) 캐시가 있으면 그것을 쓴다.
+        // 새로 돌리는 것은 옆 폴더에서 — 끝까지 성공해야 받아 둔 결과를 바꾼다 (바뀐 스크립트가 아직 깨져 있거나 pip·radare2 를
+        // 받지 못해도 어제 쓰던 결과로 계속 고칠 수 있게)
+        return ScriptCache.Run(work, cache, overwrite, trustUnstamped: false,
+            fetch: () => Scripts.ToDictionary(f => f, f => Http.GetBytes($"{Raw}/{f}")),
+            hash: scripts => Files.Sha256Hex(scripts.OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value).ToArray()),
+            readCache: () => OpcodeSources.ParseDiff(File.ReadAllText(cache), what),
+            fresh: (scripts, scriptHash) => Fresh(ws, client, previous, pythonPath, scripts, scriptHash, work, what),
+            new ScriptCache.Notes(
+                FetchFailed: why => $"[opcode] localdiff 스크립트를 받지 못해 ({why}) 받아 둔 결과 사용: {cache}",
+                Cached: $"[opcode] localdiff 결과 캐시 사용: {cache}",
+                Changed: "[opcode] opcodediff 스크립트가 바뀌어 localdiff 를 다시 돌림",
+                RunFailed: why => $"[opcode] 바뀐 스크립트로 localdiff 를 다시 돌리지 못해 받아 둔 결과를 씀 - {why}"));
+    }
 
-        if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
-        Directory.CreateDirectory(work);
-        foreach (string f in Scripts)
+    private static Dictionary<int, int> Fresh(Workspace ws, GameClient client, string previous, string? pythonPath,
+                                              Dictionary<string, byte[]> scripts, string scriptHash, string dest, string what)
+    {
+        var region = client.Region!;
+        string work = ScriptCache.NewDir(dest);
+        foreach (var (f, bytes) in scripts)
         {
-            byte[] bytes = Http.GetBytesOrNull($"{Raw}/{f}") ?? throw new ToolException($"서버에서 찾지 못했습니다: {Raw}/{f}");
             File.WriteAllBytes(Path.Combine(work, Path.GetFileName(f)), bytes);
             // 저장소 최신본을 그대로 실행하므로 어느 것을 실행했는지 남긴다 (문제가 생겼을 때 추적용)
-            Log.Note($"[opcode] {f} (opcodediff master) sha256 {Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes))[..16]}");
+            Log.Note($"[opcode] {f} (opcodediff master) sha256 {Files.Sha256Hex(bytes)[..16]}");
         }
 
         string python = EnsureVenv(ws, pythonPath, File.ReadAllText(Path.Combine(work, "requirements-vtable.txt")));
@@ -81,16 +92,29 @@ internal static class LocalDiff
                 throw new ToolException($"{what} 이(가) 실패했습니다 (종료 코드 {r.Code}).{hint} " +
                                         $"자세한 내용은 {Path.Combine(work, "vtable_diff.log")} 에 있습니다. 마지막 출력: {Proc.LastLine(r.Stderr)}");
             }
-            Files.WriteAtomic(cache, r.Stdout);
+            Files.WriteAtomic(Path.Combine(work, "diff.json"), r.Stdout);
+            Files.WriteAtomic(Path.Combine(work, ScriptCache.StampFile), scriptHash);
             Log.Note($"[opcode] localdiff 완료 ({sw.Elapsed:m\\:ss})");
         }
         finally
         {
             KillStrayRadare2(r2bin);
-            File.Delete(oldCopy);
-            File.Delete(newCopy);
+            // exe 사본은 크니 지우되, 늦게 끝난 radare2 가 잡고 있어도 계산한 결과는 잃지 않게
+            foreach (string copy in new[] { oldCopy, newCopy }) Files.TryDeleteFile(copy);
         }
-        return OpcodeSources.ParseDiff(File.ReadAllText(cache), what);
+        // 다 됐으면 받아 둔 결과와 바꾼다 (바꾸지 못하면 이번 결과만 쓰고, 받아 둔 것은 그대로)
+        string result = ScriptCache.Commit(work, dest, "diff.json", "localdiff");
+        return OpcodeSources.ParseDiff(File.ReadAllText(result), what);
+    }
+
+    // 이 클라이언트 버전에 받아 둔 localdiff 결과의 옛 출시 버전들 (가까운 것부터) — 공식 패치 목록을 받지 못할 때
+    public static List<string> CachedPrevious(Workspace ws, GameClient client)
+    {
+        string dir = Path.Combine(ws.SnapshotDir(client.Region!, client.Version!), "localdiff");
+        if (!Directory.Exists(dir)) return [];
+        return Directory.GetDirectories(dir).Select(Path.GetFileName).OfType<string>()
+            .Where(v => GameVersion.IsValid(v) && File.Exists(Path.Combine(dir, v, "diff.json")))
+            .OrderByDescending(v => v, StringComparer.Ordinal).ToList();
     }
 
     // 돌릴 수 있는지. Python 이 없어도 휴대용 Python 을 받아 쓰므로, 설정에 적은 Python 경로가 틀린 경우만 false
@@ -109,25 +133,23 @@ internal static class LocalDiff
         if (File.Exists(exe)) return exe;
         string url = $"https://api.nuget.org/v3-flatcontainer/python/{PortablePython}/python.{PortablePython}.nupkg";
         Log.Note($"[opcode] 설치된 Python 3.12+ 가 없어 휴대용 Python {PortablePython} 받는 중 (약 14MB): {url}");
-        byte[] pkg = Http.GetBytesOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+        byte[] pkg = Http.GetBytes(url);
         if (!Convert.ToHexStringLower(System.Security.Cryptography.SHA512.HashData(pkg)).Equals(PortablePythonSha512, StringComparison.Ordinal))
             throw new ToolException("받은 휴대용 Python 이 예상한 파일과 다릅니다 (SHA512 불일치). 다시 시도하세요.");
         // 패키지의 tools\ 가 Python 그대로다. 임시 폴더에 다 푼 뒤 옮긴다 (중간에 끊겨 반쪽 폴더가 "있음"으로 보이지 않게)
-        string tmp = dir + ".tmp";
-        if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true);
-        using (var zip = new ZipArchive(new MemoryStream(pkg)))
-            foreach (var e in zip.Entries.Where(e => e.FullName.StartsWith("tools/", StringComparison.Ordinal) && e.Name.Length > 0))
-            {
-                string dst = Path.GetFullPath(Path.Combine(tmp, e.FullName["tools/".Length..]));
-                if (!dst.StartsWith(Path.GetFullPath(tmp) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
-                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-                e.ExtractToFile(dst);
-            }
-        if (!File.Exists(Path.Combine(tmp, "python.exe"))) throw new ToolException($"{url} 안에 python.exe 가 없습니다.");
-        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-        Directory.Move(tmp, dir);
-        foreach (string old in Directory.GetDirectories(ws.Tool("python")).Where(d => !d.Equals(dir, StringComparison.OrdinalIgnoreCase)))
-            try { Directory.Delete(old, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        Files.InstallDirectory(dir, tmp =>
+        {
+            using (var zip = new ZipArchive(new MemoryStream(pkg)))
+                foreach (var e in zip.Entries.Where(e => e.FullName.StartsWith("tools/", StringComparison.Ordinal) && e.Name.Length > 0))
+                {
+                    string dst = Path.GetFullPath(Path.Combine(tmp, e.FullName["tools/".Length..]));
+                    if (!dst.StartsWith(Path.GetFullPath(tmp) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                    e.ExtractToFile(dst);
+                }
+            if (!File.Exists(Path.Combine(tmp, "python.exe"))) throw new ToolException($"{url} 안에 python.exe 가 없습니다.");
+        });
+        Files.DeleteOthers(ws.Tool("python"), dir, "opcode");
         return exe;
     }
 
@@ -219,18 +241,16 @@ internal static class LocalDiff
         {
             string url = $"https://github.com/radareorg/radare2/releases/download/{ver}/radare2-{ver}-w64.zip";
             Log.Note($"[opcode] radare2 {ver} 받는 중: {url}");
-            byte[] zip = Http.GetBytesOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+            byte[] zip = Http.GetBytes(url);
             // 임시 폴더에 다 푼 뒤 옮긴다 — 중간에 끊기면 radare2.exe 만 있고 DLL 이 빠진 폴더가 "설치됨"으로 보이므로
-            string tmp = dir + ".tmp";
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true);
-            ZipFile.ExtractToDirectory(new MemoryStream(zip), tmp);
-            if (FindRadare2Bin(tmp) == null) throw new ToolException($"{url} 안에 radare2.exe 가 없습니다.");
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-            Directory.Move(tmp, dir);
+            Files.InstallDirectory(dir, tmp =>
+            {
+                ZipFile.ExtractToDirectory(new MemoryStream(zip), tmp);
+                if (FindRadare2Bin(tmp) == null) throw new ToolException($"{url} 안에 radare2.exe 가 없습니다.");
+            });
             bin = FindRadare2Bin(dir)!;
         }
-        foreach (string old in Directory.GetDirectories(baseDir).Where(d => !d.Equals(dir, StringComparison.OrdinalIgnoreCase)))
-            Directory.Delete(old, recursive: true);
+        Files.DeleteOthers(baseDir, dir, "opcode");
         return bin;
     }
 

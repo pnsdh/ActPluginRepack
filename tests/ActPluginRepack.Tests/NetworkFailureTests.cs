@@ -243,8 +243,10 @@ public sealed class NetworkFailureTests : IDisposable
             var config = new AppConfig([client], SharpVision: null, Ida: null);
             using var opcodes = new OpcodeCollector(new Workspace(tmp.Path), Path.Combine(tmp.Path, "plugin.dll"), config,
                                                     false, false, false, new HashSet<string> { "opcodediff" });
-            Assert.Null(opcodes.Collect(client));
-            var failure = Assert.IsType<NetworkException>(opcodes.DownloadFailure);
+            var got = opcodes.Collect(client);
+            Assert.Null(got.Outcome);
+            Assert.Null(got.Error);
+            var failure = Assert.IsType<NetworkException>(got.DownloadFailure);
             Assert.Equal(NetworkFailure.Connection, failure.Kind);
             Assert.Same(failure, GameVersions.LastFailure);
 

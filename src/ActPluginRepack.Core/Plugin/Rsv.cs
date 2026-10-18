@@ -39,7 +39,7 @@ internal static class Rsv
     // ACT 로그 폴더: FFXIV 플러그인 설정 > ACT 설정 > 기본 위치
     public static string LogFolder()
     {
-        string config = Path.GetDirectoryName(Install.ActConfigPath)!;
+        string config = Path.GetDirectoryName(ActLocator.ActConfigPath)!;
         string? Read(string file, string element, string name)
         {
             try
@@ -49,7 +49,7 @@ internal static class Rsv
                 return XDocument.Load(path).Descendants(element)
                     .FirstOrDefault(e => (string?)e.Attribute("Name") == name)?.Attribute("Value")?.Value;
             }
-            catch (Exception ex) when (ex is System.Xml.XmlException or IOException or UnauthorizedAccessException) { return null; }
+            catch (Exception ex) when (ex is System.Xml.XmlException || Errors.IsFileError(ex)) { return null; }
         }
         return new[]
         {

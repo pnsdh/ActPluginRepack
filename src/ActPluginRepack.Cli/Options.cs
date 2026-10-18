@@ -30,9 +30,18 @@ internal sealed class Options
     public bool Flag(string name) => _flags.Contains(name);
     public IReadOnlyList<string> GetAll(string name) => _all.GetValueOrDefault(name) ?? [];
 
-    // 콤마 구분 목록 옵션 (예: --filter a,b). 미지정 시 빈 배열.
+    // 여러 값: --target 처럼 GetAll 로 읽는 옵션은 여러 번 주고, GetList 로 읽는 옵션은 쉼표로 잇는다 (도움말의 규칙)
+    // 쉼표 구분 목록 옵션 (예: --filter a,b). 미지정 시 빈 배열.
     public string[] GetList(string name) =>
         Get(name)?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+
+    // 지역 옵션 (global / korean / ...). fallback 이 없으면 꼭 줘야 한다.
+    public global::Region Region(string name, string? fallback = null)
+    {
+        string value = Get(name) ?? fallback ?? Need(name);
+        return global::Region.Find(value)
+               ?? throw new ToolException($"알 수 없는 지역입니다: '{value}'. {string.Join(" / ", global::Region.All.Select(r => r.Name))} 중 하나를 쓰세요.");
+    }
 
     // --root 가 있으면 그 폴더, 없으면 현재 폴더에서 위로 찾는다
     public Workspace Workspace() => global::Workspace.Find(Get("--root"));

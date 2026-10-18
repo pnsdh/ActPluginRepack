@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -56,8 +55,8 @@ internal static class HttpCache
             if (head == null || head.Url != url || head.Length != data.Length - 4 - headLength) return null;
             return new Entry(data[(4 + headLength)..], head.ETag, head.SavedAt);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException
-                                       or IndexOutOfRangeException or NotSupportedException)
+        catch (Exception ex) when (ex is JsonException or ArgumentException or IndexOutOfRangeException or NotSupportedException ||
+                                   Errors.IsFileError(ex))
         {
             return null; // 없음 / 깨짐 / 다른 프로세스가 바꾸는 중
         }
@@ -81,7 +80,7 @@ internal static class HttpCache
             }
             File.Move(tmp, path, overwrite: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (Errors.IsFileError(ex))
         {
             // 캐시는 있으면 좋은 것 — 못 써도 그냥 넘어간다 (디스크 가득, 권한, 동시 쓰기)
         }
@@ -91,18 +90,12 @@ internal static class HttpCache
     public static void Touch(string url, Entry entry) => Put(url, entry.Body, entry.ETag);
 
     internal static string PathOf(string url) =>
-        Path.Combine(Dir, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(url)))[..32] + ".bin");
+        Path.Combine(Dir, Files.Sha256Hex(Encoding.UTF8.GetBytes(url))[..32] + ".bin");
 
     private static void Prune()
     {
         if (Interlocked.Exchange(ref _pruned, 1) == 1) return;
         foreach (var f in new DirectoryInfo(Dir).EnumerateFiles())
-        {
-            try
-            {
-                if (DateTime.UtcNow - f.LastWriteTimeUtc > TimeSpan.FromDays(2)) f.Delete();
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        }
+            if (DateTime.UtcNow - f.LastWriteTimeUtc > TimeSpan.FromDays(2)) Files.TryDeleteFile(f.FullName);
     }
 }

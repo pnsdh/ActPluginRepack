@@ -48,7 +48,9 @@ internal sealed partial class MainViewModel : ObservableObject
     partial void OnIsAdvancedChanged(bool value)
     {
         AppState.Settings.Advanced = value;
-        AppState.Settings.Save();
+        // 저장 실패(백신 잠금 등)로 모드 전환까지 막지 않는다 — 바인딩 setter 안의 예외는 WPF 가 조용히 삼켜 화면만 안 바뀐다
+        try { AppState.Settings.Save(); }
+        catch (Exception ex) when (Errors.IsToolOrFileError(ex)) { Errors.WriteLog(ex, "gui settings"); }
         if (!CanNavigate) return;
         if (CurrentPage is HomeViewModel or AdvancedViewModel) Navigator.ShowStart();
         // 설정 화면은 모드에 따라 보이는 항목과 저장하는 항목이 다르므로 새 모드로 다시 연다 (저장하지 않은 입력은 버림)
@@ -60,6 +62,9 @@ internal sealed partial class MainViewModel : ObservableObject
 
     [RelayCommand]
     private void GoSettings() => Navigator.Show(new SettingsViewModel());
+
+    [RelayCommand]
+    private void GoHelp() => Navigator.Show(new HelpViewModel());
 }
 
 internal static class Navigator
@@ -86,7 +91,10 @@ internal static class Navigator
         else Show(new HomeViewModel());
     }
 
-    // 시작 화면에 한 번 보일 알림 (간편 모드: 위쪽 알림 칸 — 다른 화면으로 가거나 [새로 고침]하면 사라짐, 고급 모드: 현재 상태 맨 위)
+    // 시작 화면에 한 번 보일 알림.
+    // 간편 모드: 알림 칸 — 다른 화면으로 갔다 오면(첫 화면을 새로 만든다) 사라진다. 창으로 돌아올 때의 다시 읽기(Reload)는
+    //   남기고, [새로 고침](주 버튼을 누를 수 없을 때만 보임)을 누르면 지운다.
+    // 고급 모드: 현재 상태 칸 맨 위 — 상태를 다시 읽으면(새로 고침, 다른 화면에서 돌아옴) 사라진다.
     public static void Notify(string message)
     {
         switch (Main.CurrentPage)
@@ -105,5 +113,20 @@ internal static class Navigator
     {
         if (Main.Update.Updating || Main.JobRunning) return;
         Show(new RunViewModel(title, steps, job, ShowStart));
+    }
+
+    // ACT 의 파일을 바꾸는 작업: 진행 화면으로 넘어가기 전에 ACT·게임이 꺼져 있는지 확인한다 (넘어간 뒤에 실패하면 누른
+    // 버튼이 있던 화면으로 돌아올 수 없다). 켜져 있으면 넘어가지 않고 그 안내를 onBlocked 로 — 누른 화면에 보인다.
+    public static void TryShowRun(string title, IEnumerable<StepItem> steps, Func<RunViewModel, CancellationToken, Task> job,
+                                  Action<string> onBlocked)
+    {
+        if (Main.Update.Updating || Main.JobRunning) return;
+        try { Install.EnsureClosed(); }
+        catch (AppsRunningException ex)
+        {
+            onBlocked(Friendly.Describe(ex).Message);
+            return;
+        }
+        ShowRun(title, steps, job);
     }
 }

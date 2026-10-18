@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 
 // input\.state.json — 마지막 prepare 가 재료를 어느 게임 버전 / 베이스 플러그인 버전 기준으로 만들었는지.
@@ -12,20 +11,23 @@ internal sealed record MaterialState(
     bool? PatchNeeded,        // null: 판단할 수 없음
     bool MemoryFixedByInput = false,
     [property: System.Text.Json.Serialization.JsonPropertyName("Skipped")] // 예전 기록과 같은 키
-    Dictionary<string, string>? Outdated = null) // 최신 버전이 아니라 이번 재료에서 뺀 클라이언트: 지역 -> 그때의 게임 버전
+    Dictionary<string, string>? Outdated = null, // 최신 버전이 아니라 이번 재료에서 뺀 클라이언트: 지역 -> 그때의 게임 버전
+    List<string>? Unconfirmed = null,            // 이번 버전 것으로 확인된 공개 자료 없이 정한 opcode 의 지역 (공개되면 다시 확인)
+    // prepare 의 결론 (예전 기록에는 없음). 이름으로 저장한다 — 순서가 바뀌어도 뜻이 바뀌지 않게 (숫자로 된 기록도 읽힘)
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<PrepareOutcome>))]
+    PrepareOutcome? Outcome = null)
 {
     public sealed record OpcodeInfo(string Source, int Changed, int Total, int Missing = 0);
 
-    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
-
+    // 마지막 prepare 기록. 없거나 읽지 못하면 null (깨졌거나 잠깐 잠긴 기록도 없는 것으로 — 상태 화면 전체가 실패하지 않게)
     public static MaterialState? Load(Workspace ws)
     {
         if (!File.Exists(ws.StatePath)) return null;
-        try { return JsonSerializer.Deserialize<MaterialState>(File.ReadAllText(ws.StatePath), Json); }
-        catch (JsonException) { return null; } // 깨진 기록은 없는 것으로
+        try { return JsonSerializer.Deserialize<MaterialState>(File.ReadAllText(ws.StatePath), JsonOptions.Indented); }
+        catch (Exception ex) when (ex is JsonException || Errors.IsFileError(ex)) { return null; }
     }
 
-    public void Save(Workspace ws) => Files.WriteAtomic(ws.StatePath, JsonSerializer.Serialize(this, Json));
+    public void Save(Workspace ws) => Files.WriteAtomic(ws.StatePath, JsonSerializer.Serialize(this, JsonOptions.Indented));
 
     // 지금 상태와 다른 점 (빌드 전에 알릴 것). 비어 있으면 최신.
     public List<string> Differences(string pluginPath, IEnumerable<GameClient> clients)
@@ -48,10 +50,5 @@ internal sealed record MaterialState(
     public bool IsOutdated(GameClient c) =>
         c.Region != null && Outdated != null && Outdated.TryGetValue(c.Region.Name, out string? v) && v == c.Version;
 
-    public static string? PluginVersionOf(string pluginPath)
-    {
-        if (!File.Exists(pluginPath)) return null;
-        try { return AssemblyName.GetAssemblyName(pluginPath).Version?.ToString(); }
-        catch (Exception ex) when (ex is BadImageFormatException or IOException) { return null; }
-    }
+    public static string? PluginVersionOf(string pluginPath) => Versions.OfAssembly(pluginPath)?.ToString();
 }

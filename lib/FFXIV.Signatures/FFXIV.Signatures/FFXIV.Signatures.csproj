@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- FFXIV 게임 exe 의 시그니처 도구: PE 읽기, 패턴 파싱(pelite / hex), 스캔, 값 해석, 패치 뒤 시그니처 재생성.
+       ActPluginRepack 과 OverlayPlugin/cactbot 의 점검 도구가 함께 쓴다. 다른 프로젝트를 참조하지 않는다. -->
+  <PropertyGroup>
+    <RootNamespace>FFXIV.Signatures</RootNamespace>
+    <AssemblyName>FFXIV.Signatures</AssemblyName>
+    <!-- 공개 API 는 추가만 하고 의미를 바꾸지 않는다. 깨는 변경이면 major 를 올리고 SignatureLibrary.ApiVersion 도 올린다.
+         어셈블리 버전은 따로 적는다 — 이 라이브러리를 참조하는 앱을 -p:Version=<앱 버전> 으로 빌드해도 앱 버전이 되지 않게. -->
+    <SignaturesVersion>1.2.0</SignaturesVersion>
+    <Version>$(SignaturesVersion)</Version>
+    <AssemblyVersion>$(SignaturesVersion)</AssemblyVersion>
+    <FileVersion>$(SignaturesVersion)</FileVersion>
+    <InformationalVersion>$(SignaturesVersion)</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Iced" Version="1.21.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FFXIV.Signatures.Tests" />
+  </ItemGroup>
+
+</Project>

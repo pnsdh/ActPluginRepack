@@ -38,6 +38,9 @@ obj/
 # hotfix 명령이 만드는 패치본 배포 묶음
 /hotfix/
 
+# 작업 기록 (작업마다 한 파일)
+/logs/
+
 # 화면에서 새로 만들 때 옮겨 둔 깨진 config.json
 /config.json.broken-*
 

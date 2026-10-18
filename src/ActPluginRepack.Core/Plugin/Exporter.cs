@@ -5,6 +5,17 @@ using Mono.Cecil;
 // 어셈블리를 프로세스에 로드하지 않는다.
 internal static class Exporter
 {
+    // 플러그인에 들어 있는 data 리스트 하나의 내용 (없으면 null)
+    public static string? ReadData(string plugin, string name)
+    {
+        if (!File.Exists(plugin)) return null;
+        using var module = Repacker.ReadPlugin(plugin);
+        using var inner = Costura.ReadInner(module, Costura.Resource);
+        return inner.Resources.OfType<EmbeddedResource>().FirstOrDefault(r => r.Name == Costura.GeneratedPrefix + name) is { } res
+            ? System.Text.Encoding.UTF8.GetString(res.GetResourceData()).TrimStart('\uFEFF')
+            : null;
+    }
+
     // what: data | overrides | opcodes. outDir 생략 시 기본 위치(data\ 또는 input\opcodes / input\overrides).
     // 이미 있는 파일은 force 가 아니면 덮어쓰지 않는다. 내보낸 파일 수를 돌려준다.
     public static int Export(Workspace ws, string what, string? plugin, string? outDir, string[] filters, bool force)
@@ -54,7 +65,7 @@ internal static class Exporter
             Log.Info($"  내보냄 {fn} ({bytes.Length} 바이트)");
             count++;
         }
-        Log.Info($"[+] {count}개 파일 -> {outDir}");
+        Log.Info($"[export] {count}개 파일 -> {outDir}");
         return count;
     }
 }

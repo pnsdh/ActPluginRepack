@@ -1,46 +1,13 @@
 namespace ActPluginRepack.Tests;
 
-public class SigPatternTests
+// 시그니처 라이브러리(FFXIV.Signatures — 자체 시험은 lib\FFXIV.Signatures 에)의 오류가 이 도구의 ToolException 으로 오는지
+public class SigLibTests
 {
-    private static ScanTarget Target(TempDir tmp, byte[] text) => new(tmp.File("t.exe", FakePe.Build(text)));
-
     [Fact]
-    public void FollowsCallTargetAndWildcards()
+    public void LibraryErrorsBecomeToolErrors()
     {
-        using var tmp = new TempDir();
-        // 90 | E8 rel32(0x10) | 4C 8B 47
-        byte[] text = [0x90, 0xE8, 0x10, 0x00, 0x00, 0x00, 0x4C, 0x8B, 0x47];
-        var m = Assert.Single(SigPattern.Parse("E8 $ { ' } 4C 8B ?").Scan(Target(tmp, text)));
-        Assert.Equal(FakePe.TextRva + 1, m.Rva);
-        Assert.Equal(FakePe.TextRva + 2 + 4 + 0x10, m.Saves[0]); // rel32 다음 주소 + 0x10
-        Assert.Equal(m.Rva + 8, m.End);
-    }
-
-    [Fact]
-    public void AlternationAndOverlappingMatches()
-    {
-        using var tmp = new TempDir();
-        byte[] text = [0x48, 0x8B, 0x48, 0x8B, 0x4C, 0x8B];
-        var matches = SigPattern.Parse("(48 | 4C) 8B").Scan(Target(tmp, text));
-        Assert.Equal(3, matches.Count);
-        // 0A(줄바꿈 바이트)도 와일드카드에 맞아야 한다 (Singleline)
-        Assert.Single(SigPattern.Parse("11 ? 22").Scan(Target(tmp, [0x11, 0x0A, 0x22])));
-    }
-
-    [Theory]
-    [InlineData("4C 8")]          // 짝 없는 16진수
-    [InlineData("(4C 8B")]        // 괄호
-    [InlineData("4C | 8B")]       // 괄호 밖 |
-    [InlineData("4C [5-3] 8B")]   // 범위 거꾸로
-    [InlineData("4C * 8B")]       // * 하나
-    [InlineData("")]
-    public void RejectsBadSyntax(string text) => Assert.Throws<ToolException>(() => SigPattern.Parse(text));
-
-    [Fact]
-    public void MachinaDoubleStarIsOneByte()
-    {
-        using var tmp = new TempDir();
-        Assert.Single(SigPattern.Parse("11 ** 22").Scan(Target(tmp, [0x11, 0x99, 0x22])));
+        Assert.Throws<ToolException>(() => SigLib.Parse("4C 8"));
+        Assert.Throws<ToolException>(() => SigLib.Pe("not a pe"u8.ToArray(), "test"));
     }
 }
 

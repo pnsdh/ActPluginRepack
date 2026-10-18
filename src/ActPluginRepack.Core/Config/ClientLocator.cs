@@ -18,7 +18,8 @@ internal static class ClientLocator
         void Add(string? dir, string source)
         {
             if (string.IsNullOrWhiteSpace(dir)) return;
-            try { dir = Path.GetFullPath(dir.Trim().Trim('"')); }
+            // 끝의 \ 는 뗀다 (설치 기록의 "...\KOREA\" 와 기본 경로가 같은 폴더로 묶이게)
+            try { dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir.Trim().Trim('"'))); }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return; }
             // game\ 이나 ffxiv_dx11.exe 를 가리켜도 설치 폴더로
             if (File.Exists(dir)) dir = Path.GetDirectoryName(dir)!;
@@ -55,9 +56,9 @@ internal static class ClientLocator
     public static Region? InferRegion(string installDir)
     {
         string boot = Path.Combine(installDir, "boot");
-        if (File.Exists(Path.Combine(boot, "FFXIV_Boot.exe"))) return Region.Find("korean");
+        if (File.Exists(Path.Combine(boot, "FFXIV_Boot.exe"))) return Region.Korean;
         if (File.Exists(Path.Combine(boot, "ffxivboot.exe")) || File.Exists(Path.Combine(boot, "ffxivlauncher64.exe")))
-            return Region.Find("global");
+            return Region.Global;
         return null;
     }
 
@@ -82,19 +83,30 @@ internal static class ClientLocator
             @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         ];
+        // 권한이 막힌 키(보안 프로그램 등)는 건너뛴다 — 하나 때문에 찾기 전체가 실패하지 않게
+        var found = new List<string>();
         foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
         foreach (string key in keys)
         {
-            using var root = hive.OpenSubKey(key);
-            if (root == null) continue;
-            foreach (string name in root.GetSubKeyNames())
+            try
             {
-                using var app = root.OpenSubKey(name);
-                if (app?.GetValue("DisplayName") is not string display || !display.Contains("FINAL FANTASY XIV", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (app.GetValue("InstallLocation") is string loc && loc.Length > 0) yield return loc;
+                using var root = hive.OpenSubKey(key);
+                if (root == null) continue;
+                foreach (string name in root.GetSubKeyNames())
+                {
+                    try
+                    {
+                        using var app = root.OpenSubKey(name);
+                        if (app?.GetValue("DisplayName") is not string display || !display.Contains("FINAL FANTASY XIV", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if (app.GetValue("InstallLocation") is string loc && loc.Length > 0) found.Add(loc);
+                    }
+                    catch (Exception ex) when (ex is System.Security.SecurityException || Errors.IsFileError(ex)) { }
+                }
             }
+            catch (Exception ex) when (ex is System.Security.SecurityException || Errors.IsFileError(ex)) { }
         }
+        foreach (string loc in found) yield return loc;
     }
 
     private static string? XivLauncherGamePath()
@@ -106,14 +118,16 @@ internal static class ClientLocator
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             return doc.RootElement.TryGetProperty("GamePath", out var p) ? p.GetString() : null;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException) { return null; }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException || Errors.IsFileError(ex)) { return null; }
     }
 
     // Steam 라이브러리 폴더들 (steamapps\libraryfolders.vdf 의 "path")
     private static IEnumerable<string> SteamLibraries()
     {
         if (!OperatingSystem.IsWindows()) return [];
-        string? steam = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null) as string;
+        string? steam;
+        try { steam = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null) as string; }
+        catch (Exception ex) when (ex is System.Security.SecurityException || Errors.IsFileError(ex)) { return []; }
         if (steam == null) return [];
         var libs = new List<string> { steam };
         string vdf = Path.Combine(steam, "steamapps", "libraryfolders.vdf");
@@ -123,7 +137,7 @@ internal static class ClientLocator
                 libs.AddRange(Regex.Matches(File.ReadAllText(vdf), "\"path\"\\s+\"([^\"]+)\"")
                     .Select(m => m.Groups[1].Value.Replace(@"\\", @"\")));
         }
-        catch (IOException) { }
+        catch (Exception ex) when (Errors.IsFileError(ex)) { }
         return libs.Distinct(StringComparer.OrdinalIgnoreCase);
     }
 }

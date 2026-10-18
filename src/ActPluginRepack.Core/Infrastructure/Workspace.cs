@@ -14,6 +14,7 @@
 //   tools\             받아 둔 외부 도구와 캐시
 //   backups\<시각>\    ACT 에 설치하기 전 원래 파일 (install / restore)
 //   hotfix\<패치>\     패치본 배포 묶음 (hotfix)
+//   logs\              작업 기록 (작업마다 한 파일, 최근 TaskLog.Keep 개 — 문제 보고용 기록 묶음에 들어간다)
 internal sealed record Workspace(string Root)
 {
     public const string Marker = "build.ps1";
@@ -36,6 +37,7 @@ internal sealed record Workspace(string Root)
     public string OverlayOpcodesPath => Path.Combine(ExtrasDir, "OverlayPlugin", Install.OverlayOpcodes);
     public string ToolsDir => Path.Combine(Root, "tools");
     public string BackupsDir => Path.Combine(Root, "backups");
+    public string LogsDir => Path.Combine(Root, "logs");
     public string ConfigPath => Path.Combine(Root, Config.FileName);
 
     public string SnapshotRegionDir(Region region) => Path.Combine(SnapshotsDir, region.Name);
@@ -98,7 +100,3 @@ internal sealed record Workspace(string Root)
         }
     }
 }
-
-// 같은 작업 폴더에서 다른 작업(다른 창, 명령줄)이 이미 실행 중
-internal sealed class WorkspaceBusyException(string root)
-    : ToolException($"이 작업 폴더({root})에서 다른 작업이 이미 실행 중입니다. 그 작업이 끝난 뒤에 다시 실행하세요.");

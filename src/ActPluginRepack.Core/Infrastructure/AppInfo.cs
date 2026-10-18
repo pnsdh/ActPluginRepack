@@ -10,6 +10,7 @@ internal static class AppInfo
     public const string Repo = "pnsdh/ActPluginRepack";
     public const string RepoUrl = "https://github.com/" + Repo;
     public const string ReleasesUrl = RepoUrl + "/releases";
+    public const string DiscordUrl = "https://discord.gg/R75tq68bA9"; // 문의·문제 보고
 
     public static Version Version { get; } = typeof(AppInfo).Assembly.GetName().Version ?? new Version(0, 0);
 
@@ -51,7 +52,7 @@ internal static class AppInfo
     private static List<string> TagsFromApi()
     {
         string url = $"https://api.github.com/repos/{Repo}/releases?per_page=30";
-        string json = Http.GetStringOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+        string json = Http.GetString(url);
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         return doc.RootElement.EnumerateArray()
             .Where(r => !r.GetProperty("draft").GetBoolean() && !r.GetProperty("prerelease").GetBoolean())
@@ -67,7 +68,7 @@ internal static class AppInfo
     private static List<string> TagsFromWeb()
     {
         string url = $"{RepoUrl}/releases.atom";
-        string xml = Http.GetStringOrNull(url) ?? throw new ToolException($"서버에서 찾지 못했습니다: {url}");
+        string xml = Http.GetString(url);
         System.Xml.Linq.XNamespace ns = "http://www.w3.org/2005/Atom";
         var root = System.Xml.Linq.XDocument.Parse(xml).Root;
         if (root == null || root.Name != ns + "feed") throw new ToolException($"릴리스 목록 피드의 형식이 예상과 다릅니다 ({url}).");
@@ -80,9 +81,5 @@ internal static class AppInfo
         return tags;
     }
 
-    // 2/3/4 자리 섞여도 비교되게 빠진 자리는 0 으로
-    public static bool IsNewer(Version candidate, Version current) => Normalize(candidate) > Normalize(current);
-
-    private static Version Normalize(Version v) =>
-        new(v.Major, v.Minor, Math.Max(v.Build, 0), Math.Max(v.Revision, 0));
+    public static bool IsNewer(Version candidate, Version current) => Versions.IsNewer(candidate, current);
 }

@@ -32,7 +32,14 @@ internal static class HotfixPackage
         // 틀린 패치본을 올리지 않게: 재료가 지금 게임 기준인지, 빌드가 그 재료로 만든 것인지
         var stale = prepared.Differences(ws.PluginPath, config.Clients);
         if (stale.Count > 0) throw new ToolException($"{string.Join(" ", stale)} prepare 와 build 를 다시 실행하세요.");
-        if (built.BuiltAt < prepared.PreparedAt) throw new ToolException("빌드가 마지막 prepare 보다 먼저 만들어졌습니다. build 를 다시 실행하세요.");
+        // (build --plugin <다른 dll> 로 만든 출력이면 prepare 한 베이스와 다르다)
+        if (!built.IsCurrentFor(prepared))
+            throw new ToolException(built.BuiltAt < prepared.PreparedAt
+                ? "빌드가 마지막 prepare 보다 먼저 만들어졌습니다. build 를 다시 실행하세요."
+                : $@"output\ 의 플러그인은 input\plugin 의 베이스({prepared.PluginVersion ?? "없음"})가 아니라 " +
+                  $"{built.PluginVersion ?? "알 수 없는 것"}으로 만들었습니다. build 를 다시 실행하세요.");
+        if (prepared.Outcome is PrepareOutcome.HooksBroken or PrepareOutcome.OpcodesMissing)
+            throw new ToolException("마지막 prepare 가 끝나지 않았습니다 (후크가 깨졌거나 opcode 를 다 구하지 못함). 그 상태의 패치본은 올리지 않습니다.");
         var warnings = new List<string>();
         if (prepared.PatchNeeded == false) warnings.Add("prepare 의 판단으로는 공식 플러그인이 이미 맞습니다. 올릴 필요가 없을 수 있습니다.");
         if (prepared.PatchNeeded == null) warnings.Add("prepare 에서 패치가 필요한지 판단하지 못했습니다. 확인한 뒤 올리세요.");
@@ -41,7 +48,8 @@ internal static class HotfixPackage
 
         tag ??= PatchTag(prepared.GameVersions)
                 ?? throw new ToolException("게임 버전에 맞는 패치 번호를 알 수 없습니다 (대응표가 아직 갱신되지 않음). 태그를 직접 지정하세요 (예: --tag 7.58).");
-        if (tag.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || tag.Contains(' '))
+        // 점만 있거나 점으로 끝나면 폴더 이름이 바뀐다 (".." 은 작업 폴더 밖, "7.58." 은 "7.58")
+        if (tag.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || tag.Contains(' ') || tag.Length == 0 || tag.EndsWith('.'))
             throw new ToolException($"태그에 쓸 수 없는 글자가 있습니다: '{tag}'");
 
         // 담을 파일
@@ -70,7 +78,7 @@ internal static class HotfixPackage
 
     // 클라이언트 버전 -> 패치 번호 (글로벌 먼저, 한국 전용 중간 패치처럼 대응표에 없는 버전은 건너뜀)
     public static string? PatchTag(IReadOnlyDictionary<string, string> gameVersions) =>
-        gameVersions.OrderBy(kv => kv.Key == "global" ? 0 : 1)
+        gameVersions.OrderBy(kv => kv.Key == Region.Global.Name ? 0 : 1)
             .Select(kv => GameVersions.RetailOf(kv.Value)).FirstOrDefault(r => r != null);
 
     public static string Notes(Workspace ws, string tag, MaterialState prepared, BuildInfo built, IReadOnlyList<string> files)
@@ -98,11 +106,20 @@ internal static class HotfixPackage
             sb.AppendLine($"- opcode ({string.Join(", ", g.Select(kv => Label(kv.Key)))}): {OpcodeSourceLink(g.Key.Source)} — {g.Key.Total}개 중 {g.Key.Changed}개 변경");
         // 교체 시그니처 이름과 그 위의 자동 복구 출처 주석
         var hooks = SignatureInput.LoadWithComments(ws.SignaturesDir, SignatureInput.FileName);
-        sb.AppendLine(prepared.HooksOkOfficially == false && hooks.Count > 0
-            ? $"- 패킷 후크: 공식 시그니처가 맞지 않아 교체 — {string.Join(", ", hooks.Select(h => $"{h.Name} ({SignatureSourceLink(h.AutoComment)})"))}"
+        // 판단이 아니라 빌드가 실제로 넣는 것(input\signatures 의 교체 시그니처)으로 쓴다 — 직접 넣은 줄이 남아 있으면 공식이 맞아도 그것을 쓴다
+        string why = prepared.HooksOkOfficially switch
+        {
+            false => "공식 시그니처가 맞지 않아 교체",
+            true => "공식 시그니처도 맞지만 넣어 둔 교체 시그니처를 씀",
+            null => "공식 시그니처는 점검하지 못함, 교체 시그니처를 씀",
+        };
+        sb.AppendLine(hooks.Count > 0
+            ? $"- 패킷 후크: {why} — {string.Join(", ", hooks.Select(h => $"{h.Name} ({SignatureSourceLink(h.AutoComment)})"))}"
             : "- 패킷 후크: 공식 그대로");
-        if (prepared.MemoryFixedByInput)
-            sb.AppendLine($"- 메모리 시그니처: 교체 — {string.Join(", ", SignatureInput.LoadWithComments(ws.SignaturesDir, SignatureInput.MemoryFile).Select(h => $"{h.Name} ({SignatureSourceLink(h.AutoComment)})"))}");
+        if (SignatureInput.LoadWithComments(ws.SignaturesDir, SignatureInput.MemoryFile) is { Count: > 0 } memory)
+            sb.AppendLine($"- 메모리 시그니처: 교체 — {string.Join(", ", memory.Select(h => $"{h.Name} ({SignatureSourceLink(h.AutoComment)})"))}");
+        if (SignatureInput.LoadWithComments(ws.SignaturesDir, SignatureInput.OodleFile) is { Count: > 0 } oodle)
+            sb.AppendLine($"- Oodle 시그니처: 교체 — {string.Join(", ", oodle.Select(h => $"{h.Name} ({SignatureSourceLink(h.AutoComment)})"))}");
         // 이름 override (input\overrides): ACT 로그에서 가져온 RSV, 직접 넣은 파일 — build 가 넣는 것만 (Repacker 와 같은 규칙)
         if (Directory.Exists(ws.OverridesDir))
             foreach (string f in Directory.GetFiles(ws.OverridesDir, "*.txt").Where(f => Repacker.IsOverrideFile(Path.GetFileName(f)))
@@ -121,8 +138,7 @@ internal static class HotfixPackage
     // opcode 출처 이름(OpcodeCollector 가 붙인 것) -> 쓴 파일로 가는 링크
     public static string OpcodeSourceLink(string source)
     {
-        bool filled = source.EndsWith(" +보충", StringComparison.Ordinal);
-        string s = filled ? source[..^" +보충".Length] : source;
+        var (s, filled) = OpcodeSet.SplitFilled(source);
         string[] w = s.Split(' ');
         string link = w[0] switch
         {

@@ -24,9 +24,9 @@ $common = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'false', '-p:P
             '-p:GenerateDocumentationFile=false', "-p:Version=$version", '--nologo', '-v', 'q')
 Write-Host "[publish] GUI / CLI $version"
 dotnet publish (Join-Path $root 'src\ActPluginRepack.Gui') @common -o (Join-Path $stage 'gui')
-if ($LASTEXITCODE -ne 0) { throw 'GUI publish 실패' }
+if ($LASTEXITCODE -ne 0) { throw 'GUI 를 publish 하지 못했습니다.' }
 dotnet publish (Join-Path $root 'src\ActPluginRepack.Cli') @common -o (Join-Path $stage 'cli')
-if ($LASTEXITCODE -ne 0) { throw 'CLI publish 실패' }
+if ($LASTEXITCODE -ne 0) { throw 'CLI 를 publish 하지 못했습니다.' }
 
 New-Item -ItemType Directory -Force $out, (Join-Path $out 'cli'), (Join-Path $out 'licenses') | Out-Null
 Copy-Item (Join-Path $stage 'gui\ActPluginRepack.Gui.exe') $out
@@ -39,10 +39,10 @@ Remove-Item $stage -Recurse -Force
 # 빠진 것 / 남은 것 점검 — GUI publish 가 참조한 CLI 를 반쪽(dll 없는 exe)으로 끼워 넣는 일이 없게 필요한 것만 골라 담았다
 $expected = 'ActPluginRepack.Gui.exe', '사용법.txt', 'ida', 'cli', 'licenses'
 $actual = Get-ChildItem $out | ForEach-Object Name
-if (Compare-Object $expected $actual) { throw "배포 폴더 구성이 예상과 다름: $($actual -join ', ')" }
-foreach ($d in 'ida', 'cli', 'licenses') { if (-not (Get-ChildItem (Join-Path $out $d) -File)) { throw "$d\ 가 비어 있음" } }
+if (Compare-Object $expected $actual) { throw "배포 폴더 구성이 예상과 다릅니다: $($actual -join ', ')" }
+foreach ($d in 'ida', 'cli', 'licenses') { if (-not (Get-ChildItem (Join-Path $out $d) -File)) { throw "$d\ 가 비어 있습니다." } }
 & (Join-Path $out 'cli\ActPluginRepack.exe') --version | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'cli\ActPluginRepack.exe 가 실행되지 않음' }
+if ($LASTEXITCODE -ne 0) { throw 'cli\ActPluginRepack.exe 가 실행되지 않습니다.' }
 
 Get-ChildItem $out -Recurse -File | ForEach-Object { '  {0,-40} {1,10:N0}' -f $_.FullName.Substring($out.Length + 1), $_.Length }
 if ($NoZip) { return }
@@ -53,7 +53,7 @@ $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText("$zip.sha256", "$hash  $(Split-Path $zip -Leaf)`n", (New-Object System.Text.UTF8Encoding $false))
 # 서명 (자동 업데이트가 내장 공개키로 확인한다 — 키는 %USERPROFILE%\.actrepack\release-signing-key.pem, 저장소 밖)
 & (Join-Path $out 'cli\ActPluginRepack.exe') release-sign --zip $zip
-if ($LASTEXITCODE -ne 0) { throw '서명 실패 - 서명 키를 확인 (처음이면 cli\ActPluginRepack.exe release-keygen)' }
+if ($LASTEXITCODE -ne 0) { throw '서명하지 못했습니다. 서명 키를 확인하세요 (처음이면 cli\ActPluginRepack.exe release-keygen).' }
 Write-Host "[publish] $zip  ($('{0:N0}' -f (Get-Item $zip).Length) bytes)"
-Write-Host "          SHA256 $hash  (-> .sha256, .sig — 릴리스에 zip 과 함께 셋 다 올릴 것)"
-Write-Host "          릴리스 태그는 v$version (업데이트 확인이 v 태그만 본다). 패치된 플러그인은 pnsdh/FFXIV_ACT_Plugin_HotFix 로"
+Write-Host "          SHA256 $hash  (-> .sha256, .sig — 릴리스에 zip 과 함께 셋 다 올리세요)"
+Write-Host "          릴리스 태그는 v$version 입니다 (업데이트 확인이 v 태그만 봅니다). 패치된 플러그인은 pnsdh/FFXIV_ACT_Plugin_HotFix 에 올리세요."

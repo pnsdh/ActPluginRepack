@@ -125,6 +125,68 @@ public class StatusOfficialUpdateTests
             Assert.False(Status.Collect(s.Ws).OfficialUpdate);
     }
 
+    // 지금 어디까지 왔는지 — CLI 의 다음에 할 일과 GUI 첫 화면이 같은 판단을 쓴다
+    [Fact]
+    public void StageFollowsPrepareBuildAndInstall()
+    {
+        byte[] patched = Plugin(Official, "patched");
+        using var s = new Setup(Plugin(Official, "official in act"), patchNeeded: true);
+        Assert.Equal(StatusStage.NotBuilt, Status.Collect(s.Ws).Stage);
+
+        // 지난 공식 플러그인으로 만든 결과는 지금 것이 아니다
+        string output = Directory.CreateDirectory(s.Ws.OutputDir).FullName;
+        s.File("project/output/FFXIV_ACT_Plugin.dll", patched);
+        new BuildInfo(DateTime.Now.AddMinutes(1), "3.0.3.2", [], true).Save(output);
+        Assert.Equal(StatusStage.NotBuilt, Status.Collect(s.Ws).Stage);
+
+        new BuildInfo(DateTime.Now.AddMinutes(1), Official, [], true).Save(output);
+        Assert.Equal(StatusStage.NotInstalled, Status.Collect(s.Ws).Stage);
+
+        File.WriteAllBytes(s.ActPlugin, patched);
+        var report = Status.Collect(s.Ws);
+        Assert.Equal(StatusStage.Patched, report.Stage);
+        Assert.True(report.PatchInstalled); // output\ 의 것과 같으면 백업 기록이 없어도
+    }
+
+    // prepare 가 후크가 깨진 채 / opcode 가 빠진 채 끝났으면 build 를 안내하지 않는다 (prepare 의 결론을 그대로)
+    [Fact]
+    public void UnfinishedPrepareIsNotReadyToBuild()
+    {
+        using var s = new Setup(Plugin(Official, "official in act"), patchNeeded: true);
+        foreach (var outcome in new[] { PrepareOutcome.HooksBroken, PrepareOutcome.OpcodesMissing })
+        {
+            (MaterialState.Load(s.Ws)! with { Outcome = outcome }).Save(s.Ws);
+            var report = Status.Collect(s.Ws);
+            Assert.Equal(StatusStage.NotReady, report.Stage);
+            Assert.DoesNotContain(report.Advice, a => a.Contains("build 를 실행"));
+        }
+        (MaterialState.Load(s.Ws)! with { Outcome = PrepareOutcome.PatchNeeded }).Save(s.Ws);
+        Assert.Equal(StatusStage.NotBuilt, Status.Collect(s.Ws).Stage);
+    }
+
+    // ACT 에 받아 둔 공식본보다 새 플러그인(해루봇의 한국 임시본 등)이 있으면 설치를 안내하지 않는다 — install 이 덮어쓰지 않으므로
+    [Fact]
+    public void NewerPluginInActIsItsOwnStage()
+    {
+        foreach (bool? patchNeeded in new bool?[] { true, false })
+        {
+            using var s = new Setup(Plugin("3.0.3.9", "haerubot kr"), patchNeeded: patchNeeded);
+            var report = Status.Collect(s.Ws);
+            Assert.Equal(StatusStage.NewerInstalled, report.Stage);
+            Assert.False(report.OfficialUpdate);
+            Assert.DoesNotContain(report.Advice, a => a.Contains("install 로"));
+        }
+    }
+
+    [Fact]
+    public void OfficialMatchStageAndUndecided()
+    {
+        using (var s = new Setup(null))
+            Assert.Equal(StatusStage.OfficialMatches, Status.Collect(s.Ws).Stage);
+        using (var s = new Setup(null, patchNeeded: null))
+            Assert.Equal(StatusStage.Undecided, Status.Collect(s.Ws).Stage);
+    }
+
     [Fact]
     public void MissingActConfigIsReportedNotThrown()
     {

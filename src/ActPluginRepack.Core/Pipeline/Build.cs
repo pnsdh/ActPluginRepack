@@ -12,6 +12,9 @@ internal sealed record BuildOptions
 {
     public string? Plugin { get; init; }   // 베이스 플러그인 직접 지정 (기본 input\plugin)
     public bool Csv { get; init; } = true; // false: data\ 를 다시 만들지 않고 그대로 씀
+    // true: CSV 변환이 실패해도 빌드를 멈추지 않고 이름 데이터 없이(플러그인 내장값) 만든다 — GUI 간편 흐름.
+    // 이름 표시용이라 opcode·시그니처 수정을 막을 만큼 중요하지 않다 (패치 날 데이터 형식이 바뀌어 실패하는 경우 등)
+    public bool CsvOptional { get; init; }
 }
 
 // Warnings: 빌드는 했지만 알아야 할 것 (오래된 재료 등)
@@ -21,24 +24,26 @@ internal sealed record BuildResult(string OutputDir, IReadOnlyList<string> Files
 internal sealed record BuildInfo(DateTime BuiltAt, string? PluginVersion, Dictionary<string, string> GameVersions, bool? PatchNeeded)
 {
     public const string FileName = ".build.json";
-    private static readonly System.Text.Json.JsonSerializerOptions Json = new() { WriteIndented = true };
 
+    // 빌드 기록. 없거나 읽지 못하면 null (깨졌거나 잠깐 잠긴 기록도 없는 것으로)
     public static BuildInfo? Load(string outputDir)
     {
         string path = Path.Combine(outputDir, FileName);
         if (!File.Exists(path)) return null;
-        try { return System.Text.Json.JsonSerializer.Deserialize<BuildInfo>(File.ReadAllText(path), Json); }
-        catch (System.Text.Json.JsonException) { return null; }
+        try { return System.Text.Json.JsonSerializer.Deserialize<BuildInfo>(File.ReadAllText(path), JsonOptions.Indented); }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException || Errors.IsFileError(ex)) { return null; }
     }
 
-    public void Save(string dir) => File.WriteAllText(Path.Combine(dir, FileName), System.Text.Json.JsonSerializer.Serialize(this, Json));
+    public void Save(string dir) => File.WriteAllText(Path.Combine(dir, FileName), System.Text.Json.JsonSerializer.Serialize(this, JsonOptions.Indented));
+
+    // 이 빌드가 마지막 prepare 뒤에, 그 prepare 의 공식 플러그인으로 만든 것인지 (status, hotfix)
+    public bool IsCurrentFor(MaterialState prepared) => BuiltAt >= prepared.PreparedAt && PluginVersion == prepared.PluginVersion;
 }
 
 internal static class Build
 {
     public static BuildResult Run(Workspace ws, BuildOptions o)
     {
-        string dataDir = ws.DataDir;
         string pluginPath = Path.GetFullPath(o.Plugin ?? ws.PluginPath);
         var config = Config.Load(ws.Root);
         var warnings = new List<string>(config.ClientErrors.Select(e => $"{Config.FileName}: {e} 이 클라이언트는 시그니처 검증에서 뺍니다."));
@@ -55,6 +60,8 @@ internal static class Build
                 warnings.Add($"{d} prepare 를 다시 실행하세요.");
             if (state.PatchNeeded == false)
                 warnings.Add("마지막 prepare 의 판단으로는 공식 플러그인이 이미 맞아 임시 패치가 필요 없습니다.");
+            if (state.Outcome == PrepareOutcome.HooksBroken)
+                warnings.Add("마지막 prepare 에서 패킷 후크가 깨진 채 끝났습니다. 이대로 설치하면 ACT 가 패킷을 받지 못할 수 있습니다 — input\\signatures 를 확인하세요.");
             // opcode 를 못 구한 클라이언트는 input\opcodes 에 예전 값이 남아 있을 수 있다
             foreach (var c in clients.Where(c => c.Region != null && !state.Opcodes.ContainsKey(c.Region.Name)))
                 warnings.Add($"{c.Name}: 마지막 prepare 에서 opcode 를 구하지 못했습니다. 이대로 만들면 예전 값이 들어갈 수 있습니다.");
@@ -63,51 +70,8 @@ internal static class Build
         foreach (string w in warnings) Log.Warn($"[build] {w}");
         Operation.ThrowIfCancelled();
 
-        // 1) CSV -> data
-        //   - 다국어 리스트(Action/Status/Territory/ContentFinder): 모든 언어 폴더마다 생성.
-        //   - 고정 3종(ActionCategory/World/Map, 플러그인이 _English 만 읽음): input\csv\en 이
-        //     있을 때만 en 에서 생성(영어->영어). en 이 없으면 베이스 DLL 영어값을 그대로 둔다.
-        if (o.Csv)
-        {
-            string csvRoot = ws.CsvDir;
-            var known = Region.All.SelectMany(r => r.CsvLeafs).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var langDirs = Directory.Exists(csvRoot)
-                ? Directory.GetDirectories(csvRoot).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList()
-                : [];
-            foreach (string d in langDirs.Where(d => !known.Contains(Path.GetFileName(d))))
-                Log.Warn($@"[csv] input\csv\{Path.GetFileName(d)} - 알 수 없는 언어 폴더라 건너뜀 ({string.Join("/", known)} 만 씀)");
-            langDirs = langDirs.Where(d => known.Contains(Path.GetFileName(d))).ToList();
-            if (langDirs.Count == 0)
-            {
-                Log.Note(@"[csv] input\csv 에 언어 폴더 없음 - 데이터 생성 건너뜀");
-            }
-            else
-            {
-                // data 를 매번 CSV 에서 새로 생성(오래된 파일 잔류 방지). 변환 실패는 곧바로
-                // 빌드 실패다 — 계속 진행하면 누락분이 조용히 베이스 DLL 값으로 남기 때문.
-                // 임시 폴더에 다 만든 뒤 바꿔 넣어, 실패해도 이전 data\ 가 반쪽이 되지 않게 한다.
-                string dataTmp = dataDir + ".tmp";
-                if (Directory.Exists(dataTmp)) Directory.Delete(dataTmp, recursive: true);
-                foreach (string dir in langDirs)
-                {
-                    string leaf = Path.GetFileName(dir);
-                    bool pinned = leaf.Equals("en", StringComparison.OrdinalIgnoreCase);
-                    string[] lists = pinned ? [.. CsvConverter.DefaultLists, .. CsvConverter.PinnedLists]
-                        : CsvConverter.IsChineseLeaf(leaf) ? CsvConverter.ChineseLists
-                        : CsvConverter.DefaultLists;
-                    Log.Section($"[csv] {leaf} ->{(pinned ? " (+고정 3종)" : "")}");
-                    CsvConverter.Convert(dir, dataTmp, lang: null, lists);
-                }
-                if (Directory.Exists(dataDir))
-                    foreach (string f in Directory.GetFiles(dataDir, "*.txt")) File.Delete(f);
-                Directory.CreateDirectory(dataDir);
-                foreach (string f in Directory.GetFiles(dataTmp))
-                    File.Move(f, Path.Combine(dataDir, Path.GetFileName(f)), overwrite: true);
-                Directory.Delete(dataTmp, recursive: true);
-                if (!langDirs.Any(d => Path.GetFileName(d).Equals("en", StringComparison.OrdinalIgnoreCase)))
-                    Log.Note("[csv] en 폴더 없음 - 고정 3종(ActionCategory/World/Map)은 베이스 DLL 유지");
-            }
-        }
+        // 1) CSV -> data (false: 이번 빌드에는 data\ 를 넣지 않음 — 지난 빌드의 data 가 남아 있어도)
+        bool useData = !o.Csv || BuildData(ws, o, config, clients, pluginPath, warnings);
 
         // 2) 교체할 시그니처가 있으면 config.json 의 클라이언트에서 실제로 맞는지 먼저 확인
         string? sigDir = ExistingOrNull(ws.SignaturesDir);
@@ -126,7 +90,7 @@ internal static class Build
             outputPath: Path.Combine(stage, PluginRelease.PluginFile),
             opcodesDir: ExistingOrNull(ws.OpcodesDir),
             overridesDir: ExistingOrNull(ws.OverridesDir),
-            dataDir: ExistingOrNull(dataDir),
+            dataDir: useData ? ExistingOrNull(ws.DataDir) : null,
             signaturesDir: sigDir);
 
         // 4) 플러그인 폴더의 부속 DLL(베이스 플러그인, 방금 패치해 쓴 deucalion 제외)을 같이 넣는다
@@ -152,8 +116,85 @@ internal static class Build
             File.Move(f, Path.Combine(outDir, Path.GetFileName(f)), overwrite: true);
         Directory.Delete(stage, recursive: true);
 
-        Log.Done($"[done] -> {outDir}");
+        Log.Done($"[build] 완료 -> {outDir}");
         return new BuildResult(outDir, files!, warnings, info);
+    }
+
+    // CSV -> data\
+    //   - 다국어 리스트(Action/Status/Territory/ContentFinder): 모든 언어 폴더마다 생성.
+    //   - 고정 3종(ActionCategory/World/Map, 플러그인이 _English 만 읽음): input\csv\en 이
+    //     있을 때만 en 에서 생성(영어->영어). en 이 없으면 베이스 DLL 영어값을 그대로 둔다.
+    // data\ 를 이번 빌드에 넣을지 돌려준다 (false: 넣을 언어가 없거나, CsvOptional 인데 변환이 실패함).
+    private static bool BuildData(Workspace ws, BuildOptions o, AppConfig config, List<GameClient> clients, string pluginPath,
+                                  List<string> warnings)
+    {
+        string dataDir = ws.DataDir;
+        bool useData = true;
+        string csvRoot = ws.CsvDir;
+        var known = Region.All.SelectMany(r => r.CsvLeafs).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var langDirs = Directory.Exists(csvRoot)
+            ? Directory.GetDirectories(csvRoot).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList()
+            : [];
+        foreach (string d in langDirs.Where(d => !known.Contains(Path.GetFileName(d))))
+            Log.Warn($@"[csv] input\csv\{Path.GetFileName(d)} - 알 수 없는 언어 폴더라 건너뜀 ({string.Join("/", known)} 만 씀)");
+        langDirs = langDirs.Where(d => known.Contains(Path.GetFileName(d))).ToList();
+        // 최신이 아니라 prepare 에서 뺀 클라이언트의 언어는 이번에 받지 않아 지난 패치 자료다 — 넣으면 공식 플러그인의 이름이 옛 값으로
+        // 돌아가므로 빼고 플러그인 내장값을 쓴다
+        // (중국어 cn/tc 도 같다 — 클라이언트 없이 공개 자료로 받는 것(CsvCollector.CollectChinese)은 클라이언트를 설정하지 않은 지역뿐)
+        var staleLeafs = config.Clients.Except(clients).Where(c => c.Region != null).SelectMany(c => c.Region!.CsvLeafs)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string d in langDirs.Where(d => staleLeafs.Contains(Path.GetFileName(d))))
+            Log.Warn($@"[csv] input\csv\{Path.GetFileName(d)} - 이 언어의 클라이언트가 최신이 아니라 지난 패치 자료일 수 있어 넣지 않음 (플러그인 내장값 유지)");
+        langDirs = langDirs.Where(d => !staleLeafs.Contains(Path.GetFileName(d))).ToList();
+        if (langDirs.Count == 0)
+        {
+            // 남아 있는 data\ 는 지난 패치 때 만든 것일 수 있다 — 넣으면 새 플러그인의 이름이 옛 값으로 돌아간다
+            Log.Warn(@"[csv] input\csv 에 언어 폴더 없음 - 데이터 생성과 data 교체를 건너뜀 (플러그인 내장값 유지)");
+            useData = false;
+        }
+        else
+        {
+            // data 를 매번 CSV 에서 새로 생성(오래된 파일 잔류 방지). 변환 실패는 곧바로
+            // 빌드 실패다 — 계속 진행하면 누락분이 조용히 베이스 DLL 값으로 남기 때문 (CsvOptional 이면 data 없이 계속).
+            // 임시 폴더에 다 만든 뒤 바꿔 넣어, 실패해도 이전 data\ 가 반쪽이 되지 않게 한다.
+            string dataTmp = dataDir + ".tmp";
+            if (Directory.Exists(dataTmp)) Directory.Delete(dataTmp, recursive: true);
+            try
+            {
+                foreach (string dir in langDirs)
+                {
+                    string leaf = Path.GetFileName(dir);
+                    bool pinned = leaf.Equals("en", StringComparison.OrdinalIgnoreCase);
+                    string[] lists = pinned ? [.. CsvConverter.DefaultLists, .. CsvConverter.PinnedLists]
+                        : CsvConverter.IsChineseLeaf(leaf) ? CsvConverter.ChineseLists
+                        : CsvConverter.DefaultLists;
+                    Log.Section($"[csv] {leaf} ->{(pinned ? " (+고정 3종)" : "")}");
+                    CsvConverter.Convert(dir, dataTmp, lang: null, lists);
+                }
+                // 서버 목록은 글로벌 클라이언트의 World 로 만드는데, 공식 플러그인에는 다른 지역 서버(대만 등)도 들어 있다 — 남긴다
+                CsvConverter.KeepMissingIds(Path.Combine(dataTmp, "WorldList_English.txt"), Exporter.ReadData(pluginPath, "WorldList_English.txt"));
+            }
+            catch (ToolException ex) when (o.CsvOptional)
+            {
+                Files.DeleteDirectoryQuietly(dataTmp);
+                string w = $"게임 이름 데이터(CSV)를 변환하지 못해 플러그인에 들어 있던 이름을 그대로 씁니다: {ex.Message}";
+                Log.Warn($"[csv] {w}");
+                warnings.Add(w);
+                useData = false;
+            }
+            if (useData)
+            {
+                if (Directory.Exists(dataDir))
+                    foreach (string f in Directory.GetFiles(dataDir, "*.txt")) File.Delete(f);
+                Directory.CreateDirectory(dataDir);
+                foreach (string f in Directory.GetFiles(dataTmp))
+                    File.Move(f, Path.Combine(dataDir, Path.GetFileName(f)), overwrite: true);
+                Directory.Delete(dataTmp, recursive: true);
+            }
+            if (useData && !langDirs.Any(d => Path.GetFileName(d).Equals("en", StringComparison.OrdinalIgnoreCase)))
+                Log.Note("[csv] en 폴더 없음 - 고정 3종(ActionCategory/World/Map)은 베이스 DLL 유지");
+        }
+        return useData;
     }
 
     // 플러그인 폴더의 deucalion 이 플러그인(Machina _checksum)과 짝인지 — 아니면 ACT 에서 패킷을 못 받는다
@@ -165,9 +206,7 @@ internal static class Build
         using var plugin = Repacker.ReadPlugin(pluginPath);
         using var machina = Costura.ReadInner(plugin, Costura.Machina);
         string? expected = DeucalionMachina.ReadChecksum(machina);
-        if (expected != null && expected != DeucalionMachina.FormatChecksum(Deucalion.Sha256(File.ReadAllBytes(distrib))))
-            throw new ToolException($"{Path.GetFileName(distrib)} 이(가) 이 플러그인의 deucalion 이 아닙니다 (Machina _checksum 불일치). " +
-                                    "플러그인과 같은 릴리스의 deucalion 만 같은 폴더에 두세요.");
+        if (expected != null) DeucalionMachina.CheckPair(expected, File.ReadAllBytes(distrib), distrib);
     }
 
     private static string? ExistingOrNull(string dir) => Directory.Exists(dir) ? dir : null;
@@ -177,11 +216,11 @@ internal static class Build
     private static void VerifySignatures(List<GameClient> clients, string? sigDir)
     {
         // (종류, 변형, 이름, 패턴) — memory/oodle 은 변형별로 실제 쓰일 값(변형 줄 우선)
-        var inputs = SignatureInput.Load(sigDir).Select(s => (Kind: "deucalion", Variant: "*", s.Name, s.Pattern)).ToList();
+        var inputs = SignatureInput.Load(sigDir).Select(s => (Kind: SignatureKinds.Deucalion, Variant: "*", s.Name, s.Pattern)).ToList();
         inputs.AddRange(SignatureInput.Resolve(SignatureInput.Load(sigDir, SignatureInput.MemoryFile), PluginSignatures.MemoryVariants)
-            .Select(x => (Kind: "memory", x.Variant, x.Name, x.Pattern)));
+            .Select(x => (Kind: SignatureKinds.Memory, x.Variant, x.Name, x.Pattern)));
         inputs.AddRange(SignatureInput.Resolve(SignatureInput.Load(sigDir, SignatureInput.OodleFile), PluginSignatures.OodleVariants)
-            .Select(x => (Kind: "oodle", x.Variant, x.Name, x.Pattern)));
+            .Select(x => (Kind: SignatureKinds.Oodle, x.Variant, x.Name, x.Pattern)));
         if (inputs.Count == 0) return;
         if (clients.Count == 0)
         {
@@ -191,15 +230,15 @@ internal static class Build
         var broken = new List<string>();
         foreach (var client in clients)
         {
-            var exe = new ScanTarget(client.ExePath);
+            var exe = SigLib.Target(client.ExePath);
             foreach (var (kind, variant, name, pattern) in inputs)
             {
                 if (!Sigcheck.Applies(kind, variant, client.Region)) continue;
-                int n = SigPattern.Parse(pattern).Scan(exe).Count;
-                string line = $"[sig] {client.Name} {(kind == "deucalion" ? "" : $"{kind}.{variant}.")}{name}: {n}곳";
+                int n = SigLib.Parse(pattern).Scan(exe).Count;
+                string line = $"[sig] {client.Name} {(kind == SignatureKinds.Deucalion ? "" : $"{kind}.{variant}.")}{name}: {n}곳";
                 if (n == 0) { Log.Error(line); broken.Add($"{client.Name}/{name}"); }
                 // 플러그인 메모리/Oodle 은 첫 번째로 맞는 곳만 쓴다 — 여러 곳이면 그 첫 곳이 맞는지 확인할 것
-                else if (n > 1 && kind != "deucalion") Log.Warn(line + " - 여러 곳에 맞음, 플러그인은 첫 번째 위치만 씀");
+                else if (n > 1 && kind != SignatureKinds.Deucalion) Log.Warn(line + " - 여러 곳에 맞음, 플러그인은 첫 번째 위치만 씀");
                 else Log.Section(line);
             }
         }

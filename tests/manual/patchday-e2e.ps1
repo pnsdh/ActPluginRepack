@@ -11,17 +11,16 @@
 param([string]$Previous)
 
 $ErrorActionPreference = 'Stop'
-$repo = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$gui = Join-Path $repo 'src\ActPluginRepack.Gui\bin\Release\net10.0-windows\ActPluginRepack.Gui.exe'
-$cli = Join-Path $repo 'src\ActPluginRepack.Cli\bin\Release\net10.0\ActPluginRepack.exe'
-$cecil = Join-Path $env:USERPROFILE '.nuget\packages\mono.cecil\0.11.5\lib\net40\Mono.Cecil.dll'
+. (Join-Path $PSScriptRoot 'common.ps1')
+$cecil = Join-Path $CliOut 'Mono.Cecil.dll'   # CLI 가 쓰는 것과 같은 Mono.Cecil
 $base = Join-Path $env:TEMP 'ActPluginRepack-e2e'
 $guiJson = Join-Path $env:LOCALAPPDATA 'ActPluginRepack\gui.json'
 function Say($text, $color = 'Gray') { Write-Host $text -ForegroundColor $color }
 
 try {
-    foreach ($f in $gui, $cli, $cecil) { if (-not (Test-Path $f)) { throw "없음: $f (먼저 Release 빌드)" } }
-    if (Get-Process 'ActPluginRepack.Gui' -ErrorAction SilentlyContinue) { throw 'GUI 가 이미 켜져 있어요 - 닫고 다시 실행' }
+    if (Get-Process 'ActPluginRepack.Gui' -ErrorAction SilentlyContinue) { throw 'GUI 가 이미 켜져 있습니다. 닫고 다시 실행하세요.' }
+    Build-Release @($CliProject, $GuiProject)
+    foreach ($f in $Gui, $Cli, $cecil) { if (-not (Test-Path $f)) { throw "빌드했는데 파일이 없습니다: $f" } }
 
     # 릴리스: 최신 태그는 웹 페이지 이동으로, 직전 태그는 API 목록으로 (토큰 없어도 1회)
     $repoName = 'ravahn/FFXIV_ACT_Plugin'
@@ -76,8 +75,8 @@ try {
     try {
         @{ Advanced = $false; Workspace = $ws } | ConvertTo-Json | Set-Content $guiJson -Encoding UTF8
         $env:ACTREPACK_ACT_CONFIG = $cfg
-        Say "`nGUI 를 띄워요. [확인하고 고치기] -> 결과 확인 -> (원하면 [설치 전으로 되돌리기]) -> 창 닫기" Green
-        Start-Process $gui -Wait
+        Say "`nGUI 를 띄웁니다. [확인하고 고치기] -> 결과 확인 -> (원하면 [공식 플러그인으로 되돌리기]) -> 창을 닫으세요." Green
+        Start-Process $Gui -Wait
     }
     finally {
         if ($null -ne $backup) { [IO.File]::WriteAllBytes($guiJson, $backup) } else { Remove-Item $guiJson -ErrorAction SilentlyContinue }
@@ -90,8 +89,8 @@ try {
     if ($now -eq $original) { Say '가짜 ACT 의 플러그인: 원래 상태 (설치 안 했거나 되돌림)' }
     else {
         Say '가짜 ACT 의 플러그인: 패치본이 설치됨'
-        & $cli export --root $ws --what opcodes --plugin (Join-Path $plugin 'FFXIV_ACT_Plugin.dll') --out (Join-Path $base 'cmp\patched') --force *> $null
-        & $cli export --root $ws --what opcodes --plugin (Join-Path $dl "$latest\FFXIV_ACT_Plugin.dll") --out (Join-Path $base 'cmp\official') --force *> $null
+        Invoke-Cli @('export', '--root', $ws, '--what', 'opcodes', '--plugin', (Join-Path $plugin 'FFXIV_ACT_Plugin.dll'), '--out', (Join-Path $base 'cmp\patched'), '--force') -Quiet
+        Invoke-Cli @('export', '--root', $ws, '--what', 'opcodes', '--plugin', (Join-Path $dl "$latest\FFXIV_ACT_Plugin.dll"), '--out', (Join-Path $base 'cmp\official'), '--force') -Quiet
         foreach ($f in Get-ChildItem (Join-Path $base 'cmp\official') -File) {
             $a = Get-Content $f.FullName | Where-Object { $_ -match '\S' }
             $p = Join-Path $base "cmp\patched\$($f.Name)"
@@ -105,4 +104,4 @@ try {
     Say "시험 폴더(지워도 됨): $base"
 }
 catch { Say "ERROR: $($_.Exception.Message)" Red }
-finally { Read-Host "`n엔터를 누르면 창이 닫혀요" | Out-Null }
+finally { Read-Host "`n엔터를 누르면 창이 닫힙니다" | Out-Null }

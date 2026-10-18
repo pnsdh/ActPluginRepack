@@ -29,6 +29,8 @@ internal sealed record AppConfig(List<GameClient> Clients, string? SharpVision, 
                                  string? Python = null, string? Oxidizer = null)
 {
     public List<string> ClientErrors { get; init; } = [];
+    // 값이 틀려 없는 것으로 본 선택 항목 (키 -> 까닭). 설정 전체를 못 쓰게 만들지 않는다 — 설정 화면에서 저장하면 지운다
+    public IReadOnlyDictionary<string, string> SettingErrors { get; init; } = new Dictionary<string, string>();
     public bool IdaDetected { get; init; } // Ida 를 설정이 아니라 자동으로 찾음
     // IDA 로 분석할 exe 의 지역 (통합 클라이언트 지역끼리는 opcode 가 같다). 기본은 중국판 — finder 의 시그니처가
     // 중국판 기준이라 보정 없이 맞는다. 그 지역 클라이언트가 설정에 없으면 같은 버전 exe 를 공식 패치 서버에서 받는다.
@@ -36,71 +38,79 @@ internal sealed record AppConfig(List<GameClient> Clients, string? SharpVision, 
     public const string DefaultIdaTarget = "simplified-chinese";
 }
 
-// 클라이언트 지역. 이름은 SharpVision 의 추출 폴더명(output/extract/<name>)과 같다.
-//   Label             화면에 보이는 한국어 이름
-//   SharpVisionLangs  SharpVision --lang 코드
-//   CsvLeafs          input\csv\<leaf> 폴더명 (SharpVisionLangs 와 같은 순서)
-//   Opcodes           input\opcodes\<Opcodes>.txt / Machina 의 opcode 리소스 / OverlayPlugin opcodes.jsonc 지역명
-//   CnOpcodes         CN 클라이언트와 opcode 가 같음 (7.5 통합 클라이언트) -> Yarukon CN 결과를 쓸 수 있다
-//   Karashiiro        karashiiro/FFXIVOpcodes 의 region
-//   Lemegeton         Lemegeton blueprint 의 Region Name (없으면 출력 안 함)
-internal sealed record Region(string Name, string Label, string[] SharpVisionLangs, string[] CsvLeafs, string Opcodes, bool CnOpcodes,
-                              string Karashiiro, string? Lemegeton)
-{
-    public static readonly Region[] All =
-    [
-        new("global", "글로벌", ["en", "ja", "de", "fr"], ["en", "ja", "de", "fr"], "Global", CnOpcodes: true, "Global", "EN/DE/FR/JP"),
-        new("simplified-chinese", "중국", ["chs"], ["cn"], "Chinese", CnOpcodes: true, "CN", "CN"),
-        new("korean", "한국", ["ko"], ["ko"], "Korean", CnOpcodes: true, "KR", "KR"),
-        new("traditional-chinese", "대만", ["cht"], ["tc"], "TraditionalChinese", CnOpcodes: false, "TW", null),
-    ];
-
-    // 공개 추출본(xiv-data-oxidizer 출력, fae-industries/xiv-data)의 언어 폴더 이름 — input\csv\<leaf> 와 cn 만 다르다
-    public static string DataLang(string leaf) => leaf == "cn" ? "chs" : leaf;
-
-    public static Region? Find(string name) =>
-        All.FirstOrDefault(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-
-    // 지역을 모르는 클라이언트(직접 고른 폴더 등)도 화면에 보일 수 있게
-    public static string LabelOf(Region? region) => region?.Label ?? "지역 모름";
-}
-
 internal static class Config
 {
     public const string FileName = "config.json";
 
-    private static readonly JsonDocumentOptions ReadOptions = new()
-    {
-        CommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
-
     // 한 항목만 바꿔 저장한다 (GUI 설정 화면용). 다른 항목은 그대로 두지만 주석은 사라진다.
     // value 가 null 이면 그 항목을 지운다. 쓰기는 임시 파일을 거쳐 원자적으로.
-    public static void Set(string root, string key, JsonNode? value)
+    public static void Set(string root, string key, JsonNode? value) => Set(root, [KeyValuePair.Create(key, value)]);
+
+    // 여러 항목을 한 번에 (한 번 읽고 한 번 쓴다 — 도중에 실패해도 일부만 바뀌지 않게)
+    public static void Set(string root, IReadOnlyList<KeyValuePair<string, JsonNode?>> values)
     {
         string path = Path.Combine(root, FileName);
-        JsonObject obj;
+        JsonObject obj = [];
+        if (File.Exists(path))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path), JsonOptions.Lenient);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                    throw new ToolException($"{FileName} 의 최상위가 {{ }} 객체가 아닙니다. 파일을 고치거나 지운 뒤 다시 저장하세요: {path}");
+                obj = (JsonObject)ToNode(doc.RootElement)!;
+            }
+            catch (JsonException ex)
+            {
+                throw new ToolException($"{FileName} 파일을 읽지 못했습니다: {ex.Message}");
+            }
+        }
+        foreach (var (key, value) in values)
+        {
+            if (value == null) obj.Remove(key);
+            else obj[key] = value;
+        }
+        Files.WriteAtomic(path, obj.ToJsonString(JsonOptions.Indented));
+    }
+
+    // JsonNode.Parse 는 같은 키가 두 번 있으면(손으로 고친 파일) 예외를 던진다 — Load(JsonDocument)처럼 뒤의 값을 쓴다
+    private static JsonNode? ToNode(JsonElement e)
+    {
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.Object:
+                var o = new JsonObject();
+                foreach (var p in e.EnumerateObject()) o[p.Name] = ToNode(p.Value);
+                return o;
+            case JsonValueKind.Array:
+                var a = new JsonArray();
+                foreach (var x in e.EnumerateArray()) a.Add(ToNode(x));
+                return a;
+            default:
+                return JsonNode.Parse(e.GetRawText());
+        }
+    }
+
+    // config.json 을 읽을 수 없는지 — JSON 문법이 깨졌거나 최상위가 { } 가 아님. 문법은 맞는데 내용이 틀린 것(없는 게임 경로 등)은
+    // 아니다. 파일을 읽지 못하면(잠김 등) 깨진 것으로 보지 않는다 (옮기거나 새로 만들지 않게).
+    public static bool IsBroken(string root)
+    {
+        string path = Path.Combine(root, FileName);
+        if (!File.Exists(path)) return false;
         try
         {
-            obj = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject ?? [] : [];
+            using var doc = JsonDocument.Parse(File.ReadAllText(path), JsonOptions.Lenient);
+            return doc.RootElement.ValueKind != JsonValueKind.Object;
         }
-        catch (JsonException ex)
-        {
-            throw new ToolException($"{FileName} 파일을 읽지 못했습니다: {ex.Message}");
-        }
-        if (value == null) obj.Remove(key);
-        else obj[key] = value;
-        Files.WriteAtomic(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        catch (JsonException) { return true; }
+        catch (Exception ex) when (Errors.IsFileError(ex)) { return false; }
     }
 
     // 읽을 수 없는(JSON 이 깨진) config.json 을 옆에 보관하고 치운다 — 화면에서 새로 설정할 수 있게. 보관한 경로를 돌려준다.
     public static string? MoveBroken(string root)
     {
         string path = Path.Combine(root, FileName);
-        if (!File.Exists(path)) return null;
-        try { using var _ = JsonDocument.Parse(File.ReadAllText(path), ReadOptions); return null; } // 문법은 멀쩡함
-        catch (JsonException) { }
+        if (!IsBroken(root)) return null;
         string kept = path + $".broken-{DateTime.Now:yyyyMMdd-HHmmss}";
         File.Move(path, kept);
         Log.Note($"[config] 읽을 수 없는 {FileName} 을(를) {Path.GetFileName(kept)} 로 보관하고 새로 만듦");
@@ -125,7 +135,7 @@ internal static class Config
         JsonDocument doc;
         try
         {
-            doc = JsonDocument.Parse(File.ReadAllText(path), ReadOptions);
+            doc = JsonDocument.Parse(File.ReadAllText(path), JsonOptions.Lenient);
         }
         catch (JsonException ex)
         {
@@ -134,6 +144,8 @@ internal static class Config
 
         using (doc)
         {
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                throw new ToolException($"{FileName} 의 최상위가 {{ }} 객체가 아닙니다. 파일을 고치거나 지운 뒤 다시 실행하세요: {path}");
             var clients = new List<GameClient>();
             var clientErrors = new List<string>();
             if (doc.RootElement.TryGetProperty("clients", out var cs))
@@ -155,34 +167,45 @@ internal static class Config
                 }
             }
 
+            // 선택 항목은 값이 틀리면 그 항목만 없는 것으로 보고 알린다 (하나 때문에 설정 전체를 못 쓰게 되면 화면에서 고칠 길이 없다)
+            var settingErrors = new Dictionary<string, string>();
+            T Read<T>(string key, Func<JsonElement, T> read, T absent)
+            {
+                if (!doc.RootElement.TryGetProperty(key, out var v)) return absent;
+                try { return read(v); }
+                catch (ToolException ex)
+                {
+                    settingErrors[key] = ex.Message;
+                    return absent;
+                }
+            }
             // 상대 경로는 실행한 위치가 아니라 프로젝트 폴더 기준
-            string? OptionalPath(string key) =>
-                doc.RootElement.TryGetProperty(key, out var v) ? Path.GetFullPath(PathValue(v, key), root) : null;
+            string? OptionalPath(string key) => Read<string?>(key, v => Path.GetFullPath(PathValue(v, key), root), null);
             // localDiff: 기본 켜짐 (도구와, 설치된 Python 3.12+ 가 없으면 휴대용 Python 까지 자동으로 받는다)
-            bool localDiff = !doc.RootElement.TryGetProperty("localDiff", out var ld) || ld.ValueKind switch
+            bool localDiff = Read("localDiff", ld => ld.ValueKind switch
             {
                 JsonValueKind.True => true,
                 JsonValueKind.False => false,
                 _ => throw new ToolException($"{FileName} 의 localDiff 는 true 나 false 여야 합니다."),
-            };
+            }, true);
             // ida: 문자열 = 설치 폴더, false = 쓰지 않음, 없으면 Program Files 에서 찾는다
-            bool idaDetected = !doc.RootElement.TryGetProperty("ida", out var idaElement);
-            string? ida = idaDetected ? Ida.Detect()
-                : idaElement.ValueKind == JsonValueKind.False ? null
-                : Path.GetFullPath(PathValue(idaElement, "ida"), root);
+            string? idaGiven = Read<string?>("ida", e => e.ValueKind == JsonValueKind.False ? null : Path.GetFullPath(PathValue(e, "ida"), root), null);
+            bool idaDetected = !doc.RootElement.TryGetProperty("ida", out _) || settingErrors.ContainsKey("ida");
+            string? ida = idaDetected ? Ida.Detect() : idaGiven;
             // oxidizer: true = tools\ 에 받아 빌드, 문자열 = 직접 관리하는 clone 경로
-            string? oxidizer = doc.RootElement.TryGetProperty("oxidizer", out var ox) ? ox.ValueKind switch
+            string? oxidizer = Read<string?>("oxidizer", ox => ox.ValueKind switch
             {
                 JsonValueKind.True => "true",
                 JsonValueKind.False => null,
                 _ => Path.GetFullPath(PathValue(ox, "oxidizer"), root),
-            } : null;
+            }, null);
             // idaTarget: IDA 로 분석할 exe 의 지역 (기본 simplified-chinese)
-            string idaTarget = doc.RootElement.TryGetProperty("idaTarget", out var it)
-                ? ParseIdaTarget(it.ValueKind == JsonValueKind.String ? it.GetString() : null)
-                : AppConfig.DefaultIdaTarget;
-            return new AppConfig(clients, OptionalPath("sharpVision"), ida, localDiff, OptionalPath("python"),
-                                 oxidizer) { ClientErrors = clientErrors, IdaDetected = idaDetected, IdaTarget = idaTarget };
+            string idaTarget = Read("idaTarget", it => ParseIdaTarget(it.ValueKind == JsonValueKind.String ? it.GetString() : null),
+                                    AppConfig.DefaultIdaTarget);
+            return new AppConfig(clients, OptionalPath("sharpVision"), ida, localDiff, OptionalPath("python"), oxidizer)
+            {
+                ClientErrors = clientErrors, SettingErrors = settingErrors, IdaDetected = idaDetected, IdaTarget = idaTarget,
+            };
         }
     }
 
@@ -191,6 +214,25 @@ internal static class Config
         Region.Find(value ?? "") is { CnOpcodes: true } r ? r.Name
             : throw new ToolException($"IDA 분석 대상(idaTarget / --ida-target)으로 쓸 수 없는 값입니다: '{value}'. " +
                                       string.Join(" / ", Region.All.Where(x => x.CnOpcodes).Select(x => x.Name)) + " 중 하나를 쓰세요.");
+
+    // clients 에 적힌 그대로 (지역 -> 경로). 읽지 못하거나 형식이 틀린 항목은 뺀다 (detect --save 가 기존 항목을 남기는 데)
+    public static Dictionary<string, string> RawClients(string root)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            string path = Path.Combine(root, FileName);
+            if (!File.Exists(path)) return result;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path), JsonOptions.Lenient);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("clients", out var cs) &&
+                cs.ValueKind == JsonValueKind.Object)
+                foreach (var p in cs.EnumerateObject())
+                    if (Region.Find(p.Name) is { } r && p.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(p.Value.GetString()))
+                        result[r.Name] = p.Value.GetString()!;
+        }
+        catch (Exception ex) when (ex is JsonException || Errors.IsFileError(ex)) { }
+        return result;
+    }
 
     // --game a,b 로 받은 경로들. 지역은 모르므로 이름만 game1, game2...
     public static List<GameClient> FromPaths(IEnumerable<string> paths) =>

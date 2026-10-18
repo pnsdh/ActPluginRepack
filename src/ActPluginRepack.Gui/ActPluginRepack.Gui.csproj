@@ -26,6 +26,11 @@
     <None Include="Fonts\*-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- 화면 열기 시험 (모델 없이 화면만 만드는 생성자) -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="ActPluginRepack.Gui.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\ActPluginRepack.Core\ActPluginRepack.Core.csproj" />
     <!-- 설치 단계의 관리자 권한 재실행에 쓰는 CLI 를 같은 폴더에 둔다 (개발 빌드).

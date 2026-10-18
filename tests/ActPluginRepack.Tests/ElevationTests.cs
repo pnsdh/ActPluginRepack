@@ -60,6 +60,7 @@ public class ElevationTests
     [Fact]
     public void ElevatedInstallAndRestoreEndToEnd()
     {
+        TestEnv.SkipIfActOrGameRunning(); // 관리자 쪽 설치가 "실행 중"(4)으로 끝난다
         if (!CanRun) Assert.Skip("관리자 셸에서만 시험할 수 있습니다");
         using var tmp = new TempDir();
         string ws = Path.Combine(tmp.Path, "작업 폴더 (x86)");
