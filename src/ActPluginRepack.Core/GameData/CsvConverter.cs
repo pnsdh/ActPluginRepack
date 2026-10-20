@@ -43,7 +43,22 @@ internal static class CsvConverter
         ["fr"] = "French", ["cn"] = "Chinese", ["tc"] = "TraditionalChinese",
     };
 
-    public static void Convert(string csvDir, string outDir, string? lang, string[] lists)
+    // 언어 폴더 이름(input\csv\<leaf>) -> 리스트 이름의 언어 (ko -> Korean)
+    public static string LangOf(string leaf) =>
+        LangByDir.GetValueOrDefault(leaf) ?? throw new ToolException($"'{leaf}' 언어 폴더의 언어를 알 수 없습니다.");
+
+    // quiet: 리스트마다의 기록을 남기지 않는다 (교차 확인처럼 여러 번 바꿔 견주기만 할 때)
+    public static void Convert(string csvDir, string outDir, string? lang, string[] lists, bool quiet = false)
+    {
+        bool wasQuiet = _quiet;
+        _quiet = quiet;
+        try { ConvertCore(csvDir, outDir, lang, lists); }
+        finally { _quiet = wasQuiet; }
+    }
+
+    [ThreadStatic] private static bool _quiet;
+
+    private static void ConvertCore(string csvDir, string outDir, string? lang, string[] lists)
     {
         csvDir = Path.GetFullPath(csvDir);
         if (!Directory.Exists(csvDir)) throw new ToolException($"CSV 폴더가 없습니다: {csvDir}");
@@ -97,7 +112,7 @@ internal static class CsvConverter
                     throw new ToolException($"알 수 없는 리스트입니다: '{list}'");
             }
         }
-        Log.Info($"[csv] 완료 언어={lang}");
+        if (!_quiet) Log.Info($"[csv] 완료 언어={lang}");
     }
 
     // "#" -> 지정 컬럼. 빈 값(선택적으로 id 0도) 제외. hex 면 id 를 소문자 16진수로.
@@ -209,7 +224,7 @@ internal static class CsvConverter
         Directory.CreateDirectory(outDir);
         string outPath = Path.Combine(outDir, name);
         File.WriteAllText(outPath, string.Join("\r\n", lines) + "\r\n", new UTF8Encoding(false));
-        Log.Info($"[csv] {name} : {lines.Count}개 -> {outPath}");
+        if (!_quiet) Log.Info($"[csv] {name} : {lines.Count}개 -> {outPath}");
     }
 
     private sealed record Csv(string Path, Dictionary<string, int> Index, List<string[]> Rows)

@@ -51,6 +51,10 @@ internal sealed record StatusReport(
             lines.Add(new("prepare", $"{p.PreparedAt:yyyy-MM-dd HH:mm}, " +
                                      p.PatchNeeded switch { true => "패치 필요", false => "패치 불필요", null => "패치 필요 여부 판단 불가" } +
                                      $", 후크 {p.HooksOkOfficially switch { true => "공식 시그니처로 동작", false => "시그니처 교체 필요", null => "점검 안 함" }}"));
+            if (p.FromServer)
+                lines.Add(new("", "공식 패치 서버의 최신 exe 로 준비함: " +
+                                  string.Join(", ", p.GameVersions.Where(kv => Region.Find(kv.Key) is { } r && Thaliak.Supports(r))
+                                      .Select(kv => $"{Region.Find(kv.Key)!.Label} {kv.Value}"))));
             foreach (var (region, info) in p.Opcodes) lines.Add(new("", $"opcode {region,-20} {info.Source} ({info.Changed}/{info.Total} 변경)"));
             foreach (string r in StaleReasons) lines.Add(new("", $"prepare 이후 바뀜: {r}", LogKind.Warn));
         }

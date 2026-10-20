@@ -14,11 +14,12 @@ src\ActPluginRepack.Core\     기능 전부 (라이브러리) — CLI 와 GUI �
     Config\                   config.json, 지역(Region), 게임 클라이언트
     Pipeline\                 Prepare(결론은 PrepareOutcome) · Build · Install · Status · MaterialState(재료 기록) · Hotfix ·
                               FixFlow(간편 모드 [확인하고 고치기]의 판단) · HomeScreen(간편 모드 첫 화면의 판단) ·
-                              ReportBundle(문제 보고용 기록 묶음) · TaskLog(작업 기록 logs\) · Replay(지난 패치 재현)
+                              ReportBundle(문제 보고용 기록 묶음) · TaskLog(작업 기록 logs\) · Replay(지난 패치 재현) ·
+                              SourceReport(출처 보고 — 화면의 [출처], sources)
     Plugin\                   Costura 리소스 · Repacker(주입) · 플러그인 릴리스 · 메모리/Oodle 시그니처 · RSV · Exporter
-    GameData\                 CSV 변환 · CSV 수집(oxidizer / SharpVision / 공개 저장소)
+    GameData\                 CSV 변환 · CSV 수집(oxidizer / SharpVision / 공개 저장소) · CSV 교차 확인(CsvCrossCheck)
     Opcodes\                  opcode 수집(Yarukon / karashiiro / opcodediff / 로컬 / IDA) · 부가 출력
-    Signatures\               deucalion · sigcheck · 조용한 어긋남(sigdrift) · 자동 복구 · ClientStructs 검문 · Thaliak(옛 exe) · SigLib(라이브러리 오류 -> ToolException)
+    Signatures\               deucalion · sigcheck · 조용한 어긋남(sigdrift) · 자동 복구 · 교차 확인(SignatureCrossCheck) · ClientStructs 검문 · Thaliak(옛 exe) · SigLib(라이브러리 오류 -> ToolException)
 src\ActPluginRepack.Cli\      명령줄 (옵션 해석 → Core 호출 → 콘솔 출력)
 src\ActPluginRepack.Gui\      화면 (WPF + WPF-UI, MVVM) — 간편/고급 모드, 관리자 권한 설치는 CLI 를 UAC 로 띄워서
 tests\ActPluginRepack.Tests\  Core 회귀 시험 (xUnit)
@@ -46,7 +47,7 @@ GUI 간편 모드의 판단(`FixFlow.Decide`)이 모두 이것을 쓴다. 화면
 `dotnet test` (솔루션 전체 — `tests\ActPluginRepack.Tests` · `tests\ActPluginRepack.Gui.Tests` 와 `lib\FFXIV.Signatures\FFXIV.Signatures.Tests`, 몇 초. 네트워크
 시험은 로컬 가짜 서버와 바로 실패하는 연결로, 캐시와 받는 폴더는 임시 폴더에).
 
-- `tests\ActPluginRepack.Gui.Tests`: 화면(Views 의 XAML 전부와 MainWindow)을 모델 없이 만들어 배치까지 해 XAML · `x:Static` · `StaticResource` 오류를 잡는다 (창은 띄우지 않고 작업 폴더·gui.json·ACT 는 건드리지 않음). 간편 모드의 판단은 Core 의 `FixFlow` · `HomeScreen` 에 있고 `FixFlowTests` · `HomeScreenTests` 가 시험한다.
+- `tests\ActPluginRepack.Gui.Tests`: 화면(Views 의 XAML 전부와 MainWindow)을 모델 없이 만들어 배치까지 해 XAML · `x:Static` · `StaticResource` 오류를 잡는다 (창은 띄우지 않고 작업 폴더·gui.json·ACT 는 건드리지 않음). `AdvancedOptionsTests` 는 고급 모드에서 고른 것의 저장(gui.json)·"기본과 다른 선택" 줄을 본다. 간편 모드의 판단은 Core 의 `FixFlow` · `HomeScreen` 에 있고 `FixFlowTests` · `HomeScreenTests` 가 시험한다.
 - 시험 프로젝트가 CLI 도 같은 구성으로 같이 빌드하고, 관리자 셸이면 `ElevationTests` 가 그 CLI 를 실제로 관리자로 띄워
   보호된 폴더에 설치·복원·실패·ACT 실행 중(코드 4)을 확인한다. UAC 확인 창 자체는 보안 데스크톱이라 자동으로 누를 수 없다.
 - SigRegen 백테스트는 실제 deucalion 수정 이력의 옛/새 exe 가 필요해서, 그 exe 들
@@ -117,7 +118,9 @@ prepare / build 뒤에 `hotfix` 를 실행하면 `hotfix\<패치>\` 에
 - `release-notes.md`: 게임 버전, 공식 플러그인·deucalion 버전, 만든 도구 버전, opcode 출처와 바뀐 수, 교체한 후크·메모리
   시그니처와 넣은 override 파일을 `input\.state.json` · `output\.build.json` · `input\` 에서 채우고 출처마다 링크를 건다.
   "알려진 문제" 만 손으로 고친다.
-- 패치 번호(태그)는 게임 버전에서 구하고(글로벌 먼저), 대응표에 없으면 `--tag 7.58` 로 준다.
+- 패치 번호(태그)는 게임 버전에서 구하고(글로벌 먼저), 대응표에 없으면 `--tag 7.58` 로 준다(GUI 는 hotfix 아래의 패치 번호 칸).
+- 배포 전 점검: 마지막 prepare 가 [교차 확인](HowItWorks.md#교차-확인)을 하지 않았거나, 다른 것·대조하지 못한 것이 있었으면 경고한다.
+  모두 대조해 다른 것이 없었을 때만 release-notes.md 에 "확인" 절을 넣는다. 공식 패치 서버 exe 로 준비했으면 게임 버전 줄에 그렇게 적는다.
 - prepare 이후 게임·플러그인이 바뀌었거나 빌드가 prepare 보다 먼저면 멈춘다(틀린 패치본을 올리지 않게).
 - 올리는 `gh release create ...` 명령을 알려 줄 뿐 직접 올리지는 않는다. 공식 업데이트가 나오면
   `gh release delete <패치> --repo pnsdh/FFXIV_ACT_Plugin_HotFix --cleanup-tag` 로 내린다.

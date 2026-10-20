@@ -92,6 +92,9 @@
                     <!-- 안내 문장이 이 버튼을 [자세한 기록]으로 가리킨다 (Titles.Log) -->
                     <ui:Button Content="{x:Static gui:Titles.Log}" Icon="{ui:SymbolIcon DocumentText24}" Appearance="Transparent"
                                Command="{Binding ToggleLogCommand}" />
+                    <ui:Button Content="{x:Static gui:Titles.Sources}" Icon="{ui:SymbolIcon DocumentSearch24}" Appearance="Transparent"
+                               Command="{Binding OpenSourcesCommand}" Visibility="{Binding ShowSources, Converter={StaticResource Visible}}"
+                               ToolTip="이번 확인에서 무엇을 어디서 가져왔는지 봅니다. 문제를 보고하거나 자세히 확인할 때 보는 정보입니다." />
                     <ui:Button Content="{Binding CopyText}" Icon="{ui:SymbolIcon Copy24}" Appearance="Transparent"
                                Command="{Binding CopyLogCommand}" Visibility="{Binding ShowLog, Converter={StaticResource Visible}}" />
                 </StackPanel>

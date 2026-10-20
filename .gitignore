@@ -9,6 +9,7 @@
 /input/*/*
 !/input/*/.gitkeep
 /input/.state.json
+/input/.sources.json
 
 # .NET 빌드
 bin/

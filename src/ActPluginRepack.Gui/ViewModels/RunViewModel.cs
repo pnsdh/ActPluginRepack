@@ -93,7 +93,7 @@ internal sealed partial class RunViewModel : ObservableObject
     // 준비(prepare) 의 큰 단계 이름 -> 이 화면의 단계 키 (작업이 정한다)
     internal Func<string, string?>? MapProgress { get; set; }
 
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(CancelCommand))] private bool _isRunning = true;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(CancelCommand)), NotifyPropertyChangedFor(nameof(ShowSources))] private bool _isRunning = true;
     // 취소: 누르면 지금 단계가 끝날 때 멈춘다. 취소할 수 없는 단계(설치 — 끝까지 하거나 시작 전)가 도는 동안은 누를 수 없다.
     [ObservableProperty, NotifyPropertyChangedFor(nameof(RunningText)), NotifyCanExecuteChangedFor(nameof(CancelCommand))]
     private bool _canCancel = true;
@@ -246,6 +246,14 @@ internal sealed partial class RunViewModel : ObservableObject
 
     [RelayCommand]
     private void ToggleLog() => ShowLog = !ShowLog;
+
+    // prepare 를 마쳐 출처 보고가 새로 생겼으면 [출처] (돌아오면 이 결과 화면으로). 작업이 다 끝난 뒤에만 보인다 — 도는 동안 다른 화면으로
+    // 가면 작업 중 보호(창 닫기·자동 업데이트·다른 작업 시작 막기)가 이 화면을 기준으로 하므로 풀린다
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowSources))] private bool _hasSources;
+    public bool ShowSources => HasSources && !IsRunning;
+
+    [RelayCommand]
+    private void OpenSources() => Navigator.Show(new SourcesViewModel(() => Navigator.Show(this)));
 
     // 복사하고 버튼 글자로 2초 동안 결과를 알린 뒤 label 로 되돌린다
     public static async Task CopyWithFeedback(string text, string label, Action<string> show)

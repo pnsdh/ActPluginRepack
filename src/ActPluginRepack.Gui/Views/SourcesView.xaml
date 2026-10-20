@@ -1,0 +1,83 @@
+<UserControl x:Class="ActPluginRepack.Gui.Views.SourcesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:gui="clr-namespace:ActPluginRepack.Gui">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="900" HorizontalAlignment="Stretch">
+            <TextBlock Text="{x:Static gui:Titles.Sources}" Style="{StaticResource PageTitle}" />
+            <TextBlock Text="{Binding Summary, Mode=OneTime, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,0,0,8" />
+
+            <!-- 칸마다: 제목, 항목(이름 | 설명), 그 아래 대조 결과 같은 자세한 줄 -->
+            <ItemsControl ItemsSource="{Binding Sections, Mode=OneTime}" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <ui:Card Padding="16,12" Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Title}" Style="{StaticResource CardTitle}" Margin="0,0,0,6" />
+                                <ItemsControl ItemsSource="{Binding Items}" Focusable="False" Grid.IsSharedSizeScope="True">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" MinWidth="64" SharedSizeGroup="SourceName" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource FieldLabel}" Margin="0,1,12,0" />
+                                                <!-- 이름이 없는 줄(공식 플러그인 버전, "하지 않았습니다" 등)은 이름 칸 없이 왼쪽부터 -->
+                                                <StackPanel>
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Grid.Column" Value="1" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Name}" Value="">
+                                                                    <Setter Property="Grid.Column" Value="0" />
+                                                                    <Setter Property="Grid.ColumnSpan" Value="2" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <!-- 확인할 것(교차 확인에서 다름)은 눈에 띄게 -->
+                                                    <TextBlock Text="{Binding Text, Converter={StaticResource KeepAll}}">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Body}">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Warning}" Value="True">
+                                                                        <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <ItemsControl ItemsSource="{Binding Details}" Focusable="False" Margin="12,0,0,2">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Converter={StaticResource KeepAll}}" Style="{StaticResource Caption}" FontSize="13" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ui:Card>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,16">
+                <!-- 입력칸이 없으므로 Esc 로도 돌아가기 -->
+                <ui:Button Content="돌아가기" IsCancel="True" Command="{Binding BackCommand}" />
+                <ui:Button Content="{Binding CopyText}" Icon="{ui:SymbolIcon Copy24}" Appearance="Transparent" Margin="8,0,0,0"
+                           Command="{Binding CopyCommand}" Visibility="{Binding HasReport, Converter={StaticResource Visible}}"
+                           ToolTip="이 내용을 글자로 복사합니다. 디스코드 등에 붙여 넣을 수 있습니다." />
+                <ui:Button Content="{Binding OpenText}" Icon="{ui:SymbolIcon Open24}" Appearance="Transparent" Margin="4,0,0,0"
+                           Command="{Binding OpenFileCommand}" Visibility="{Binding HasReport, Converter={StaticResource Visible}}"
+                           ToolTip="작업 폴더의 extras\sources.txt 를 엽니다. 확인할 때마다 새로 씁니다." />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

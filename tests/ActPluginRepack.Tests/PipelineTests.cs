@@ -92,7 +92,43 @@ public class ConfigTests
         Assert.Equal("korean", ClientLocator.InferRegion(Path.Combine(tmp.Path, "kr"))?.Name);
         Assert.Equal("global", ClientLocator.InferRegion(Path.Combine(tmp.Path, "gl"))?.Name);
         Assert.Null(ClientLocator.InferRegion(tmp.Path));
+        // 중국판은 런처가 글로벌판과 같은 ffxivboot.exe — SDO 로그인 모듈로 먼저 가린다
+        tmp.File("cn/boot/ffxivboot.exe", "x");
+        tmp.File("cn/sdo/sdologin/sdologinentry64.dll", "x");
+        Assert.Equal("simplified-chinese", ClientLocator.InferRegion(Path.Combine(tmp.Path, "cn"))?.Name);
     }
+
+    // 추정이 적어 둔 지역과 "확실히" 다른 때만: 글로벌 런처는 표시가 약해 중국(sdo 없는 설치)·대만판도 글로벌로 보일 수 있다
+    [Fact]
+    public void RegionContradictionIgnoresWeakGlobalGuess()
+    {
+        Assert.True(ClientLocator.Contradicts(Region.SimplifiedChinese, Region.Global));   // 예전에 global 로 적힌 중국판
+        Assert.True(ClientLocator.Contradicts(Region.Korean, Region.Global));
+        Assert.True(ClientLocator.Contradicts(Region.Global, Region.Korean));
+        Assert.False(ClientLocator.Contradicts(Region.Global, Region.TraditionalChinese));
+        Assert.False(ClientLocator.Contradicts(Region.Global, Region.SimplifiedChinese));
+        Assert.False(ClientLocator.Contradicts(Region.Korean, Region.Korean));
+    }
+
+    // 기본으로 고르는(쓰는) 클라이언트는 한국·글로벌 — 중국·대만판은 찾아도 사용자가 고를 때만
+    [Fact]
+    public void OnlyKoreanAndGlobalAreSelectedByDefault()
+    {
+        Assert.True(ClientLocator.SelectedByDefault(Region.Global));
+        Assert.True(ClientLocator.SelectedByDefault(Region.Korean));
+        Assert.False(ClientLocator.SelectedByDefault(Region.SimplifiedChinese));
+        Assert.False(ClientLocator.SelectedByDefault(Region.TraditionalChinese));
+        Assert.False(ClientLocator.SelectedByDefault(null));
+    }
+
+    // 설치 기록에 설치 위치가 없으면(중국판) 아이콘 경로 ...\boot\ffxivboot.exe 에서
+    [Theory]
+    [InlineData(@"C:\Games\FF14\boot\ffxivboot.exe", @"C:\Games\FF14")]
+    [InlineData(@"""C:\Games\FF14\boot\ffxivboot.exe"",0", @"C:\Games\FF14")]
+    [InlineData(@"C:\Games\FF14\game\ffxiv_dx11.exe", @"C:\Games\FF14\game\ffxiv_dx11.exe")]   // boot 밖이면 그대로 (찾기가 확인)
+    [InlineData(@"", null)]
+    public void InstallDirFromUninstallIcon(string icon, string? expected) =>
+        Assert.Equal(expected, ClientLocator.InstallDirOfIcon(icon));
 }
 
 public class MaterialStateTests
@@ -134,6 +170,79 @@ public class MaterialStateTests
         var updated = korean with { Version = "2026.10.06.0000.0000" };
         Assert.False(state.IsOutdated(updated));
         Assert.Contains(state.Differences(@"C:\does\not\exist.dll", [global, updated]), d => d.Contains("korean"));
+    }
+
+    // 공식 패치 서버 exe 로 준비한 재료: 내 게임(공식 패치 서버가 있는 지역)과는 비교하지 않는다 — 대만판처럼 그대로 쓴 클라이언트만
+    [Fact]
+    public void ServerExeMaterialIgnoresMyGame()
+    {
+        var state = new MaterialState(DateTime.Now, null,
+            new() { ["global"] = "2026.10.16.0000.0000", ["korean"] = "2026.10.06.0000.0000", ["traditional-chinese"] = "2026.09.01.0000.0000" },
+            [], true, true, FromServer: true);
+        var korean = new GameClient("korean", Region.Korean, @"C:\k\ffxiv_dx11.exe", "2026.09.15.0000.0000"); // 업데이트 안 한 내 게임
+        var tc = new GameClient("traditional-chinese", Region.TraditionalChinese, @"C:\t\ffxiv_dx11.exe", "2026.09.01.0000.0000");
+        Assert.Empty(state.Differences(@"C:\does\not\exist.dll", [korean, tc]));
+        Assert.Contains(state.Differences(@"C:\does\not\exist.dll", [korean, tc with { Version = "2026.10.01.0000.0000" }]),
+                        d => d.Contains("traditional-chinese"));
+    }
+
+    // build 가 검증할 클라이언트: 보통은 설정된 것(뺀 것 제외), 공식 패치 서버 exe 로 준비했으면 받아 둔 그 exe + 대만판
+    [Fact]
+    public void ClientsUsedFollowsHowMaterialWasPrepared()
+    {
+        using var tmp = new TempDir();
+        var ws = new Workspace(tmp.Path);
+        var korean = new GameClient("korean", Region.Korean, @"C:\k\ffxiv_dx11.exe", "2026.09.15.0000.0000");
+        var tc = new GameClient("traditional-chinese", Region.TraditionalChinese, @"C:\t\ffxiv_dx11.exe", "2026.09.01.0000.0000");
+
+        var local = new MaterialState(DateTime.Now, null, new() { ["traditional-chinese"] = tc.Version! }, [], true, true,
+                                      Outdated: new() { ["korean"] = korean.Version! });
+        Assert.Equal([tc], local.ClientsUsed(ws, [korean, tc]));
+
+        var server = local with { Outdated = null, FromServer = true };
+        Assert.Equal([tc], server.ClientsUsed(ws, [korean, tc]));
+        // 받아 둔 exe 가 없으면(지웠거나 깨짐) 검증 없이 지나가지 않고 prepare 를 다시 하라고 한다
+        var missing = server with { GameVersions = new() { ["korean"] = "2026.10.06.0000.0000" } };
+        Assert.Contains("prepare 를 다시", Assert.Throws<ToolException>(() => missing.ClientsUsed(ws, [korean, tc])).Message);
+    }
+
+    // 공식 패치 서버 exe 로 준비할 때 받는 지역: 설정된 지역만(경로가 틀린 것도 — 지역 이름만 넘어온다), 모든 지역을 고르면
+    // 공식 패치 서버가 있는 글로벌·중국·한국 (대만판 없음)
+    [Fact]
+    public void ServerRegionsFollowConfiguredRegions()
+    {
+        Assert.Equal([Region.Korean], Prepare.ServerRegions([Region.Korean], all: false));
+        Assert.Equal([Region.SimplifiedChinese, Region.Korean],
+                     Prepare.ServerRegions([Region.Korean, Region.SimplifiedChinese, Region.TraditionalChinese, null, Region.Korean], all: false));
+        Assert.Empty(Prepare.ServerRegions([Region.TraditionalChinese], all: false));
+        Assert.Equal([Region.Global, Region.SimplifiedChinese, Region.Korean], Prepare.ServerRegions([], all: true));
+    }
+
+    // 공식 패치 서버 exe 로 준비한 재료: 내 게임이 준비한 버전보다 옛 버전이면(업데이트 전) 차이가 아니지만, 새 버전이 됐거나
+    // 기록에 없는 지역이면 알린다
+    [Fact]
+    public void ServerExeMaterialGoesStaleWhenMyGameMovesPast()
+    {
+        var state = new MaterialState(DateTime.Now, null, new() { ["korean"] = "2026.10.06.0000.0000" }, [], true, true, FromServer: true);
+        var korean = new GameClient("korean", Region.Korean, @"C:\k\ffxiv_dx11.exe", "2026.10.06.0000.0000");
+        Assert.Empty(state.Differences(@"C:\does\not\exist.dll", [korean with { Version = "2026.09.15.0000.0000" }]));
+        Assert.Empty(state.Differences(@"C:\does\not\exist.dll", [korean]));
+        Assert.Contains(state.Differences(@"C:\does\not\exist.dll", [korean with { Version = "2026.10.16.0000.0000" }]), d => d.Contains("패치되었습니다"));
+        var global = new GameClient("global", Region.Global, @"C:\g\ffxiv_dx11.exe", "2026.10.16.0000.0000");
+        Assert.Contains(state.Differences(@"C:\does\not\exist.dll", [korean, global]), d => d.Contains("기록에 없는"));
+    }
+
+    [Fact]
+    public void ServerExeFlagRoundTrips()
+    {
+        using var tmp = new TempDir();
+        var ws = new Workspace(tmp.Path);
+        new MaterialState(DateTime.Now, "1.2", new() { ["global"] = "v" }, [], true, true, FromServer: true).Save(ws);
+        Assert.True(MaterialState.Load(ws)!.FromServer);
+        // 예전 기록(키 없음)은 내 게임으로 준비한 것
+        File.WriteAllText(ws.StatePath, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(ws.StatePath), @",\s*""FromServer"": true", ""));
+        Assert.DoesNotContain("FromServer", File.ReadAllText(ws.StatePath));
+        Assert.False(MaterialState.Load(ws)!.FromServer);
     }
 
     [Theory]

@@ -27,6 +27,7 @@ internal static class Program
             Func<int>? command = args[0] switch
             {
                 "status" => () => Commands.Status(rest),
+                "sources" => () => Commands.Sources(rest),
                 "detect" => () => Commands.Detect(rest),
                 "github" => () => Commands.GitHubToken(rest),
                 "prepare" => () => Commands.Prepare(rest),
@@ -117,7 +118,7 @@ internal static class Program
             보통 쓰는 순서
               status   지금 상태와 다음에 할 일 (게임/플러그인 버전, prepare, build, ACT 설치)
                          GitHub API 사용량과 이 도구의 새 버전은 인터넷으로 확인
-              detect   설치된 게임 클라이언트 찾기   --save (찾은 것을 config.json 의 clients 로 저장)
+              detect   설치된 게임 클라이언트 찾기   --save (찾은 한국·글로벌과 이미 적어 둔 지역을 config.json 의 clients 로 저장)
               prepare  입력 데이터 준비: 최신 공식 플러그인 -> 스냅샷 -> 시그니처 점검·자동 복구 -> opcode -> CSV
                          끝에 패치가 필요한지 판단한다 (공식 플러그인이 이미 맞으면 불필요)
                          --plugin <dll> --no-plugin --no-snapshot --no-sigcheck --no-repair --no-opcodes --no-csv
@@ -125,9 +126,16 @@ internal static class Program
                          opcode: Yarukon > karashiiro(버전 확인 시) > 로컬 opcodediff(지금 exe vs 직전 출시 exe, 항상 대조) > ...
                          --ida-target <지역> (IDA 로 분석할 exe: simplified-chinese(기본, 없으면 받음) / global / korean)
                          설치된 게임이 최신 버전이 아니면 그 클라이언트는 빼고 진행 (모두 오래됐으면 멈춤)
+                         --server-exe (설치된 게임 대신 그 지역의 공식 패치 서버 최신 exe 로 - 내 게임 버전은 안 봄, CSV 생략)
+                           --all-regions (설치하지 않은 지역(글로벌·한국·중국)의 exe 도 받아 점검)
+                         --cross-check (배포 전 점검: opcode 는 IDA 까지 모든 출처를 돌려 항목마다 견주고, 쓰일 시그니처는
+                                        공식·upstream·SigRegen·ClientStructs 로, 게임 데이터는 SharpVision·oxidizer·공개 저장소로
+                                        대조 - 결과는 sources / extras\crosscheck\)
                          --sources a,b (출처 제한: {Wrap(Prepare.AllSourceNames, 66, 28)})
                          exit 2: 깨진 후크 또는 시그니처 점검 실패,  exit 3: 준비 미완료 (opcode 미공개 등)
                          exit 5: 패치 불필요 (공식 플러그인이 이미 맞음 — install --official),  exit 6: 판단할 수 없음
+              sources  마지막 prepare 의 출처 보고: 게임 exe, opcode 출처와 다른 출처와의 대조, 교체 시그니처, CSV
+                         (extras\sources.txt 와 같음)
               build    input\ 으로 output\FFXIV_ACT_Plugin.dll 만들기 (CSV 변환 + 주입 + 부속 파일)
                          --plugin <dll> --no-csv
               install  output\ 를 ACT 의 FFXIV 플러그인 폴더에 설치 (원래 파일은 backups\ 에)

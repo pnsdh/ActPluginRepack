@@ -37,13 +37,17 @@ internal sealed partial class MainViewModel : ObservableObject
 
     partial void OnCurrentPageChanged(object? value)
     {
-        if (value is RunViewModel run)
+        // (출처 화면에서 진행 화면으로 돌아올 때 같은 화면이 다시 오므로 한 번만 붙인다)
+        if (value is RunViewModel run && _watched.TryAdd(run, new object()))
             run.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(RunViewModel.IsRunning)) OnPropertyChanged(nameof(CanNavigate));
             };
         OnPropertyChanged(nameof(CanNavigate));
     }
+
+    // 감시를 붙인 진행 화면 (지나간 화면은 붙잡지 않게 약한 참조)
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<RunViewModel, object> _watched = new();
 
     partial void OnIsAdvancedChanged(bool value)
     {

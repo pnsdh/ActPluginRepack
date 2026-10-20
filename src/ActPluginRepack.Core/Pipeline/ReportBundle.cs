@@ -57,6 +57,7 @@ internal static class ReportBundle
             AddFile("logs/error.log", Errors.LogPath, optional: true);
 
             AddFile("state/input/.state.json", ws.StatePath, optional: true);
+            AddFile($"state/input/{SourceReport.FileName}", SourceReport.PathOf(ws), optional: true);
             AddFile($"state/output/{BuildInfo.FileName}", Path.Combine(ws.OutputDir, BuildInfo.FileName), optional: true);
             AddFile("state/config.json", ws.ConfigPath, optional: true);
             AddFile("state/gui.json", AppPaths.GuiSettings, optional: true);

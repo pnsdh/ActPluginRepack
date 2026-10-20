@@ -13,6 +13,7 @@ internal static class Titles
     public const string Selected = "선택한 작업";              // 고급 모드 [선택한 작업 실행]의 진행 화면 제목
     public const string GameLocation = "게임 위치 설정";       // 게임 위치 화면을 여는 버튼과 그 화면 제목
     public const string Log = "자세한 기록";                  // 진행 화면의 기록 펼치기 버튼
+    public const string Sources = "출처";                       // 마지막 확인이 무엇을 어디서 가져왔는지 (출처 화면과 그 버튼)
     public const string Help = "도움말";                        // 창 윗줄·첫 화면의 버튼과 그 화면 제목
     public const string Discord = "디스코드";                    // 문의·문제 보고 (도움말 화면)
     public const string SaveReport = "문제 보고용 기록 저장";   // 도움말 화면, 실패·경고로 끝난 진행 화면의 결과 아래

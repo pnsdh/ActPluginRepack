@@ -30,6 +30,7 @@ internal static class Jobs
 
         vm.Start(StepKeys.Check);
         var r = await Runner.RunLocked(vm, ws, ct, () => Prepare.Run(ws, new PrepareOptions { IdaFallback = false })); // IDA 는 고급 모드에서만
+        vm.HasSources = SourcesViewModel.Available(ws);
 
         // 확인 / 정보 모으기 단계는 결과에 따라 한 번만 끝낸다 (멈춘 까닭은 그 단계에)
         var dataState = r.Steps.Any(s => s.Status == StepStatus.Warning) ? StepState.Warning : StepState.Done;
@@ -238,13 +239,21 @@ internal static class Jobs
                 IdaTarget = o.IdaTarget,
                 Overwrite = o.Overwrite,
                 Sources = o.SelectedSources,
+                ServerExe = o.ServerExe,
+                ServerAllRegions = o.ServerExe && o.ServerAllRegions,
+                CrossCheck = o.CrossCheck,
             };
             var r = await Runner.RunLocked(vm, ws, ct, () => Prepare.Run(ws, options));
+            vm.HasSources = SourcesViewModel.Available(ws);
             foreach (var s in r.Steps) vm.Log.Add(new LogLine(s.SummaryKind, s.SummaryLine()));
             verdict = r.Verdict;
+            // 교차 확인에서 다른 것이나 대조하지 못한 것 (경고 단계로 남음) — 판단은 그대로지만 결과에 알린다
+            bool crossWarn = o.CrossCheck && r.Steps.Any(s => s.Name.StartsWith(Prepare.CrossCheckStep, StringComparison.Ordinal) && s.Status != StepStatus.Ok)
+                             || o.CrossCheck && MaterialState.Load(ws) is { CrossCheckGaps.Count: > 0 };
+            if (crossWarn) verdict += $"\n교차 확인에서 다른 것이나 대조하지 못한 것이 있습니다. [{Titles.Sources}]에서 확인하세요.";
             // 후크가 깨졌거나(점검 실패 포함) opcode 가 빠졌으면 끝나지 않은 것 — 패치가 필요 없음 / 판단 불가는 고른 작업대로 계속
             bool ok = r.Outcome is not (PrepareOutcome.HooksBroken or PrepareOutcome.OpcodesMissing);
-            vm.Finish(StepKeys.Prepare, ok ? StepState.Done : StepState.Warning, r.Verdict);
+            vm.Finish(StepKeys.Prepare, ok && !crossWarn ? StepState.Done : StepState.Warning, r.Verdict);
             if (!ok && (o.DoBuild || o.DoInstall))
             {
                 vm.SkipRemaining(Stopped);
@@ -285,7 +294,7 @@ internal static class Jobs
             if (!o.InstallOfficial) OfferRestore(vm);
         }
         else await OfferOfficialUpdate(vm, ws);
-        var (hotfixNote, hotfixMade) = o.DoHotfix ? await RunHotfix(vm, ws, ct) : (null, true);
+        var (hotfixNote, hotfixMade) = o.DoHotfix ? await RunHotfix(vm, ws, ct, o.HotfixTag.Trim() is { Length: > 0 } tag ? tag : null) : (null, true);
         // 끝까지 했어도 경고나 실패로 끝난 단계가 있으면 성공으로 보이지 않게
         bool clean = vm.Steps.All(s => s.State is not (StepState.Warning or StepState.Failed)) && hotfixMade;
         vm.SetResult(clean ? ResultKind.Success : ResultKind.Warning,
@@ -297,7 +306,7 @@ internal static class Jobs
     // 고친 플러그인 배포 묶음 (설치 뒤에): 만들지 못해도(패치 번호를 모름 등) 설치는 이미 끝났으므로 작업을 실패로 끝내지 않고
     // 결과에 알린다. 여기서 취소해도 마찬가지 (취소 결과는 "ACT 는 그대로"라고 알리므로 설치한 뒤에는 쓰지 않는다).
     // 돌려주는 것: 결과 설명에 붙일 말 (만든 곳, 또는 만들지 못한 까닭)과 만들었는지
-    private static async Task<(string? Note, bool Made)> RunHotfix(RunViewModel vm, Workspace ws, CancellationToken ct)
+    private static async Task<(string? Note, bool Made)> RunHotfix(RunViewModel vm, Workspace ws, CancellationToken ct, string? tag)
     {
         const string cancelled = "취소해서 만들지 않았습니다.";
         if (ct.IsCancellationRequested)
@@ -311,11 +320,11 @@ internal static class Jobs
         {
             hotfix = await Runner.RunLocked(vm, ws, ct, () =>
             {
-                // 패치 번호를 대응표에서 못 구하면 Core 는 "--tag 로 지정"을 안내하지만 화면에서는 지정할 수 없다
-                if (MaterialState.Load(ws) is { } prepared && HotfixPackage.PatchTag(prepared.GameVersions) == null)
+                // 패치 번호를 대응표에서 못 구하면 Core 는 "--tag 로 지정"을 안내한다 — 화면에서는 hotfix 아래 칸에 적는다
+                if (tag == null && MaterialState.Load(ws) is { } prepared && HotfixPackage.PatchTag(prepared.GameVersions) == null)
                     throw new ToolException("게임 버전에 맞는 패치 번호를 알 수 없어(대응표가 아직 갱신되지 않음) 배포 묶음을 만들지 못했습니다. " +
-                                            "명령줄에서 hotfix --tag 7.58 처럼 패치 번호를 직접 지정해 만드세요.");
-                return HotfixPackage.Create(ws);
+                                            "hotfix 아래의 패치 번호 칸에 7.58 처럼 적고, 다른 작업은 끈 채 hotfix 만 다시 실행하세요.");
+                return HotfixPackage.Create(ws, tag);
             });
         }
         catch (OperationCanceledException)

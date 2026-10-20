@@ -21,9 +21,11 @@
 //     때만 input\opcodes 에 쓴다 (일부만 바뀐 opcode 는 옛 값이 새 패킷과 겹칠 수 있어서). 못 구하면 예전 prepare 가 남긴
 //     파일을 지워 베이스 플러그인 값을 쓰게 한다.
 // idaFallback: 다른 출처가 모두 없을 때 IDA 를 돌릴지 (간편 모드는 false — IDA 는 고급 모드·명령줄에서만)
+// crossCheck: 교차 확인 — 공개본이 있어도 IDA 까지 모든 출처를 돌려 항목마다 출처끼리 견준다 (고르는 출처는 그대로).
+//             CrossCheckResults / WriteCrossCheckSets 로 보고한다.
 internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig config, bool forceIda, bool idaFallback,
                                        bool overwrite,
-                                       IReadOnlySet<string> sources) : IDisposable
+                                       IReadOnlySet<string> sources, bool crossCheck = false) : IDisposable
 {
     // --sources 로 쓸 출처를 제한할 수 있다 (검증용). 이름: yarukon / opcodediff / localdiff / ida / karashiiro
     public static readonly string[] SourceNames = ["yarukon", "opcodediff", "localdiff", "ida", "karashiiro"];
@@ -57,6 +59,76 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     // 그대로 둔 이름 수. Missing 이 0 이고 Changed 가 0 이어야 "공식 플러그인 opcode 가 그대로 맞음"이다.
     public sealed record Outcome(string Source, int Changed, int Total, int Missing);
     public IReadOnlyDictionary<Region, Outcome> Outcomes => _outcomes;
+
+    // 교차 확인: 지역마다 쓸 수 있었던 모든 출처. Verified: 이번 버전 것으로 확인됨 (아니면 참고로만)
+    private sealed record CrossSource(string Label, OpcodeSet Set, bool Verified);
+    private readonly Dictionary<Region, List<CrossSource>> _crossSets = [];
+    private readonly List<(string Version, OpcodeSet Set)> _crossDerived = []; // 교차 확인 때문에만 돌린 IDA (대조에만)
+    private readonly HashSet<Region> _idaPossible = [];
+
+    // 교차 확인 결과 (지역 하나): 견준 출처(이번 버전 것으로 확인된 것), 견준 항목 수, 출처끼리 값이 다른 항목,
+    // 참고(확인 안 된 출처와 다른 항목 수), IDA 가 들어갔는지, IDA 를 돌릴 수 있었는지 (클라이언트도, 같은 버전의 직접 추출도 없으면 false),
+    // 그 지역의 opcode 를 실제로 고쳐 썼는지 (견준 출처 없이 고쳐 썼으면 확인 안 된 출처로 정한 것)
+    public sealed record CrossResult(Region Region, List<string> Sources, int Compared, List<string> Differences, List<string> Reference, bool HasIda,
+                                     bool IdaPossible = true, bool Used = false);
+
+    public List<CrossResult> CrossCheckResults()
+    {
+        var results = new List<CrossResult>();
+        foreach (var (region, sets) in _crossSets.OrderBy(kv => Array.IndexOf(Region.All, kv.Key)))
+        {
+            var verified = sets.Where(s => s.Verified).ToList();
+            var (compared, diffs) = Disagreements(verified.Select(s => (s.Label, s.Set)).ToList());
+            var reference = sets.Where(s => !s.Verified).Select(s =>
+            {
+                if (verified.Count == 0) return $"{s.Label}: 견줄 확인된 출처가 없음";
+                var (n, d) = Disagreements([(verified[0].Label, verified[0].Set), (s.Label, s.Set)]);
+                return $"{s.Label}: {n}개 중 {d.Count}개가 {verified[0].Label} 와 다름";
+            }).ToList();
+            results.Add(new CrossResult(region, verified.Select(s => s.Label).ToList(), compared, diffs, reference,
+                                        verified.Any(s => s.Set.Source.StartsWith("IDA", StringComparison.Ordinal)), _idaPossible.Contains(region),
+                                        _outcomes.ContainsKey(region)));
+        }
+        return results;
+    }
+
+    // 출처들을 항목마다 견준다: 둘 이상에 있는 항목 수와, 값이 갈린 항목 ("이름: 값 (출처, 출처) / 값 (출처)" — 많은 쪽 먼저)
+    internal static (int Compared, List<string> Differences) Disagreements(IReadOnlyList<(string Label, OpcodeSet Set)> sets)
+    {
+        var diffs = new List<string>();
+        int compared = 0;
+        foreach (string name in OpcodeNames.Used)
+        {
+            var values = sets.Where(s => s.Set.Server.ContainsKey(name)).GroupBy(s => s.Set.Server[name]).ToList();
+            if (values.Sum(g => g.Count()) < 2) continue;
+            compared++;
+            if (values.Count > 1)
+                diffs.Add($"{name}: " + string.Join(" / ", values.OrderByDescending(g => g.Count())
+                    .Select(g => $"{g.Key:X} ({string.Join(", ", g.Select(s => s.Label))})")));
+        }
+        return (compared, diffs);
+    }
+
+    // 교차 확인한 출처마다의 값을 dir\<지역>\<출처>.txt 로 ("이름|16진수", 직접 견줘 보기용). 이번 것만 남긴다.
+    public List<string> WriteCrossCheckSets(string dir)
+    {
+        Files.DeleteDirectoryQuietly(dir);
+        var written = new List<string>();
+        foreach (var (region, sets) in _crossSets)
+            foreach (var source in sets)
+            {
+                string file = Path.Combine(dir, region.Opcodes, string.Concat(source.Label.Split(Path.GetInvalidFileNameChars())).Replace(' ', '_') + ".txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllLines(file, source.Set.Server.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}|{kv.Value:X}"));
+                written.Add(file);
+            }
+        return written;
+    }
+
+    // 고른 출처를 다른 출처와 대조한 결과 (출처 보고용). Differences: "이름: 고른 값 vs 다른 값" (16진수)
+    public sealed record Comparison(string Other, int Compared, IReadOnlyList<string> Differences);
+    private readonly Dictionary<Region, List<Comparison>> _comparisons = [];
+    public IReadOnlyDictionary<Region, List<Comparison>> Comparisons => _comparisons;
 
     // Collect 의 결과
     //   Outcome          opcode 를 확보해 썼으면 그 결과, 못 구했으면 null
@@ -126,6 +198,9 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             {
                 skipped.Add($@"지난 extras\{Path.GetFileName(old)} 를 지우지 못했습니다 ({ex.Message}). 이번 것을 만들지 못하면 그것이 설치될 수 있습니다.");
             }
+        // (extras\Machina 는 확인용 사본이라 지우거나 쓰지 못해도 단계 경고로 만들지 않는다 — 기록에만)
+        if (!Files.DeleteDirectoryQuietly(ws.MachinaOpcodesDir))
+            Log.Note(@"[machina] 지난 extras\Machina 를 지우지 못함 - 그 안의 파일은 지난 게임 버전 것일 수 있음");
         foreach (var region in Region.All.Where(r => !configured.Contains(r)))
         {
             string? version = region.CnOpcodes ? versionOf(region) : null;
@@ -174,6 +249,28 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         }
         Log.Info();
         if (LemegetonOutput.Write(ws.LemegetonPath, _resolved)) written.Add("lemegeton.xml");
+        // Machina 형식: 이번에 구한 지역의 input\opcodes 파일 그대로 (플러그인에 들어가는 값 — 공개된 opcode 와 견줘 보기용)
+        var machina = new List<string>();
+        foreach (var region in _resolved.Select(r => r.Region).Distinct())
+        {
+            string src = Path.Combine(ws.OpcodesDir, region.Opcodes + ".txt");
+            if (!File.Exists(src)) continue;
+            try
+            {
+                Directory.CreateDirectory(ws.MachinaOpcodesDir);
+                File.Copy(src, Path.Combine(ws.MachinaOpcodesDir, region.Opcodes + ".txt"), overwrite: true);
+                machina.Add(region.Opcodes);
+            }
+            catch (Exception ex) when (Errors.IsFileError(ex))
+            {
+                Log.Note($@"[machina] extras\Machina\{region.Opcodes}.txt 를 쓰지 못함 - {ex.Message}");
+            }
+        }
+        if (machina.Count > 0)
+        {
+            Log.Info($@"[machina] {ws.MachinaOpcodesDir} ({string.Join(", ", machina)})");
+            written.Add($@"Machina\ ({string.Join(", ", machina)})");
+        }
         string? template = Try("OverlayPlugin 템플릿", () => Http.GetStringOrNull(OverlayPluginOutput.UpstreamUrl));
         if (template == null)
         {
@@ -219,17 +316,50 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
                 if (localdiff != null) _derivedSets.Add((version!, localdiff));
             }
         }
-        // IDA (~5분): --ida 면 항상, 아니면 다른 출처가 모두 없을 때만 (간편 모드는 그때도 쓰지 않음)
-        OpcodeSet? ida = null;
-        if (client != null && config.Ida != null && Use("ida") && (forceIda || (idaFallback && !published && localdiff == null)))
+        // IDA (~5분): --ida 면 항상, 아니면 다른 출처가 모두 없을 때만 (간편 모드는 그때도 쓰지 않음).
+        // 교차 확인 때문에만 돌린 결과(idaCross)는 대조에만 쓴다 — 고르는 값·보충·다른 지역의 직접 추출 결과는 평소와 같게
+        OpcodeSet? ida = null, idaCross = null;
+        bool idaForUse = forceIda || (idaFallback && !published && localdiff == null);
+        if (client != null && config.Ida != null && Use("ida") && (idaForUse || crossCheck))
         {
-            if (!forceIda) Log.Note("[opcode] 로컬 opcodediff·공개본 없음 - IDA 로 직접 추출");
-            ida = Try("IDA", () => RunIda(client));
-            if (ida != null) _derivedSets.Add((version!, ida));
+            if (!idaForUse) Log.Note("[opcode] 교차 확인 - IDA 로도 직접 추출 (대조에만 씀)");
+            else if (!forceIda) Log.Note("[opcode] 로컬 opcodediff·공개본 없음 - IDA 로 직접 추출");
+            var got = Try("IDA", () => RunIda(client));
+            if (got != null && idaForUse)
+            {
+                ida = got;
+                _derivedSets.Add((version!, ida));
+            }
+            else if (got != null)
+            {
+                idaCross = got;
+                _crossDerived.Add((version!, got));
+            }
         }
         // 설정에 없는 지역: 같은 opcode 를 쓰는 다른 클라이언트의 같은 게임 버전 직접 추출 결과
         OpcodeSet? derived = client == null && region.CnOpcodes
             ? _derivedSets.FirstOrDefault(d => d.Version == version).Set : null;
+
+        // 교차 확인: 이 지역에 쓸 수 있었던 모든 출처 (클라이언트가 없는 지역은 같은 버전의 직접 추출 결과 모두).
+        // 이번 버전 것인지 확인되지 않은 karashiiro 는 견주지 않고 참고로만 (지난 패치 값이면 바뀐 opcode 마다 다르게 나온다)
+        if (crossCheck)
+        {
+            var all = new List<CrossSource>();
+            void Add(OpcodeSet? set, bool verified = true)
+            {
+                if (set != null && all.All(x => x.Set != set))
+                    all.Add(new(verified ? set.Source : $"{set.Source} (이번 버전인지 확인 못 함)", set, verified));
+            }
+            Add(yarukon); Add(karashiiro, k is not { Verified: false }); Add(opcodediff); Add(localdiff); Add(ida); Add(idaCross);
+            // (같은 방법 — 로컬 opcodediff, IDA — 을 같은 버전의 다른 클라이언트에 돌린 결과는 독립된 출처가 아니라 방법마다 하나만)
+            if (client == null && region.CnOpcodes)
+                foreach (var d in _derivedSets.Concat(_crossDerived).Where(d => d.Version == version)
+                             .GroupBy(d => d.Set.Source.Split(' ')[0]).Select(g => g.First()))
+                    Add(d.Set);
+            _crossSets[region] = all;
+            // IDA 를 돌릴 수 있었던 지역: 클라이언트가 있거나, 같은 버전의 다른 클라이언트를 직접 추출했으면 (없는 지역은 구조적으로 못 돈다)
+            if (client != null || _derivedSets.Concat(_crossDerived).Any(d => d.Version == version)) _idaPossible.Add(region);
+        }
 
         OpcodeSet? primary =
             forceIda ? ida ?? yarukon ?? karashiiroFirst ?? localdiff ?? derived ?? opcodediff ?? karashiiroLast
@@ -258,7 +388,8 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         var merged = new Dictionary<string, int>(primary.Server, StringComparer.Ordinal);
         var others = new[] { yarukon, opcodediff, localdiff, ida, derived, karashiiro }
             .Where(s => s != null && s != primary).Select(s => s!).Distinct().ToList();
-        foreach (var other in others) CrossCheck(region, primary, other);
+        _comparisons[region] = [];
+        foreach (var other in others) CrossCheck(region, primary, other, other == karashiiro && k is { Verified: false });
         var filled = new List<string>();
         // 보충은 이번 버전 것으로 확인된 출처에서만 (확인되지 않은 karashiiro 는 대조에만 쓴다)
         var fillers = others.Where(o => o != karashiiro || k is { Verified: true }).ToList();
@@ -447,14 +578,15 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         return null;
     }
 
-    private static void CrossCheck(Region region, OpcodeSet a, OpcodeSet b)
+    private void CrossCheck(Region region, OpcodeSet a, OpcodeSet b, bool unverified = false)
     {
         var diff = OpcodeNames.Used
             .Where(n => a.Server.TryGetValue(n, out int x) && b.Server.TryGetValue(n, out int y) && x != y)
-            .Select(n => $"{n}: {a.Server[n]} vs {b.Server[n]}").ToList();
+            .Select(n => $"{n}: {a.Server[n]:X} vs {b.Server[n]:X}").ToList();
         int compared = OpcodeNames.Used.Count(n => a.Server.ContainsKey(n) && b.Server.ContainsKey(n));
         if (diff.Count == 0) Log.Note($"[opcode] {region.Opcodes}: {a.Source} = {b.Source} ({compared}개 대조 일치)");
         else Log.Warn($"[opcode] {region.Opcodes}: {a.Source} 와 {b.Source} 가 다름:\n    " + string.Join("\n    ", diff));
+        _comparisons[region].Add(new Comparison(unverified ? $"{b.Source} (이번 버전인지 확인 못 함)" : b.Source, compared, diff));
     }
 
     private OpcodeSet? Yarukon(string version)

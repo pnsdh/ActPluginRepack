@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 //   2) 자동 복구 — 옛 exe 와 새 exe 를 비교해 새 시그니처를 만든다 (SigRegen).
 // 후보는 설정된 모든 클라이언트 exe 에서 검증해(0건이거나 deucalion 후크의 정해진 개수가 아니면 탈락) 통과한 것만
 // input\signatures 에 기록한다.
-internal static class SignatureRepair
+internal static partial class SignatureRepair
 {
     // upstream 상수 이름 -> sigcheck 의 이름
     private static readonly Dictionary<string, string> SourceNames = new(StringComparer.Ordinal)
@@ -164,10 +164,10 @@ internal static class SignatureRepair
 
     // 메모리 시그니처 후보를 글로벌 클라이언트에서 ClientStructs 이름으로 대조한다 (ClientStructsData — 주소가 글로벌 exe 기준).
     // 원래 패턴이 글로벌 옛 exe 에서 읽던 값과 후보가 글로벌 지금 exe 에서 읽는 값(둘 다 첫 일치 — 플러그인이 쓰는 것)을 비교.
-    // 해당 없으면 null: 글로벌에 쓰지 않는 변형, 원래 패턴이 글로벌에서 아직 쓰임(Validate 가 이미 같은 곳임을 확인함).
-    // 대조하려고 exe 를 받지는 않는다 (받아 둔 글로벌 옛 exe 만). 실패는 모름으로 — 검문 때문에 복구를 멈추지 않는다.
+    // 해당 없으면 null: 글로벌에 쓰지 않는 변형, 원래 패턴이 글로벌에서 아직 쓰임(Validate 가 이미 같은 곳임을 확인함 — always 면
+    // 그래도 대조: 교차 확인). 대조하려고 exe 를 받지는 않는다 (받아 둔 글로벌 옛 exe 만). 실패는 모름으로 — 검문 때문에 복구를 멈추지 않는다.
     private static (ClientStructsData.Verdict, string)? ClientStructsCheck(Workspace ws, ExeCache exes, List<GameClient> clients,
-                                                                          Sigcheck.Row original, string candidate)
+                                                                          Sigcheck.Row original, string candidate, bool always = false)
     {
         const ClientStructsData.Verdict unknown = ClientStructsData.Verdict.Unknown;
         if (!Sigcheck.Applies(original.Item.Kind, original.Item.Variant, Region.Global)) return null;
@@ -175,7 +175,7 @@ internal static class SignatureRepair
         if (global == null) return (unknown, "글로벌 클라이언트가 없음");
         try
         {
-            if (original.Pattern.Scan(exes.Target(global.ExePath)).Count > 0) return null;
+            if (!always && original.Pattern.Scan(exes.Target(global.ExePath)).Count > 0) return null;
             string? oldExe = OldExe(ws, exes, global, original.Pattern, n => n > 0, walkBack: false, [], download: false);
             if (oldExe == null) return (unknown, "원래 패턴이 맞는 글로벌 옛 exe 를 받아 두지 않음");
             var (oldData, oldWhy) = Data(Path.GetFileName(Path.GetDirectoryName(oldExe))!);

@@ -11,13 +11,30 @@ internal sealed class GuiSettings
     public bool Advanced { get; set; }
     public string? Workspace { get; set; } // null 이면 사용자 작업 폴더 (%LOCALAPPDATA%\ActPluginRepack)
     public bool Hotfix { get; set; }       // 고친 플러그인 배포 기능 (HotFix 저장소에 올리는 사람만) — 고급 모드에 hotfix 옵션을 보인다
+    public ViewModels.AdvancedOptions? Options { get; set; } // 고급 모드에서 고른 작업과 옵션 (없으면 기본값)
 
     private static string FilePath => AppPaths.GuiSettings;
 
     public static GuiSettings Load()
     {
-        try { return File.Exists(FilePath) ? JsonSerializer.Deserialize<GuiSettings>(File.ReadAllText(FilePath)) ?? new() : new(); }
-        catch (Exception ex) when (ex is JsonException || Errors.IsFileError(ex)) { return new(); }
+        try { return File.Exists(FilePath) ? Parse(File.ReadAllText(FilePath)) : new(); }
+        catch (Exception ex) when (Errors.IsFileError(ex)) { return new(); }
+    }
+
+    // 읽지 못하면 기본값. 고급 모드의 고른 것(Options)만 형식이 틀렸으면 그것만 버린다 — 작업 폴더·모드 설정까지 잃지 않게
+    internal static GuiSettings Parse(string json)
+    {
+        try { return JsonSerializer.Deserialize<GuiSettings>(json) ?? new(); }
+        catch (JsonException)
+        {
+            try
+            {
+                if (System.Text.Json.Nodes.JsonNode.Parse(json) is System.Text.Json.Nodes.JsonObject obj && obj.Remove(nameof(Options)))
+                    return obj.Deserialize<GuiSettings>() ?? new();
+            }
+            catch (JsonException) { }
+            return new();
+        }
     }
 
     public void Save() => Files.WriteAtomic(FilePath, JsonSerializer.Serialize(this, JsonOptions.Indented));

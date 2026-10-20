@@ -20,6 +20,7 @@
         <DataTemplate DataType="{x:Type vm:AdvancedViewModel}"><views:AdvancedView /></DataTemplate>
         <DataTemplate DataType="{x:Type vm:SettingsViewModel}"><views:SettingsView /></DataTemplate>
         <DataTemplate DataType="{x:Type vm:HelpViewModel}"><views:HelpView /></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SourcesViewModel}"><views:SourcesView /></DataTemplate>
     </ui:FluentWindow.Resources>
 
     <Grid>

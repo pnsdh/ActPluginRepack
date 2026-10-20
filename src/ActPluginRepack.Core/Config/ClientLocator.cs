@@ -5,9 +5,10 @@ using Microsoft.Win32;
 
 // 설치된 게임 클라이언트 찾기 (GUI 첫 설정용 — 사용자가 경로를 직접 적지 않아도 되게).
 //
-// 후보 출처: 실행 중인 게임, 기본 설치 경로, 설치 기록(레지스트리), XIVLauncher 설정, Steam 라이브러리.
-// 지역은 boot\ 의 런처로 가린다: 한국판은 FFXIV_Boot.exe(액토즈), 글로벌판은 ffxivboot.exe / ffxivlauncher64.exe.
-// 그 밖(중국/대만)은 확실한 표시를 몰라 지역을 비워 두고 사용자가 고르게 한다.
+// 후보 출처: 실행 중인 게임, 기본 설치 경로, 설치 기록(레지스트리), XIVLauncher(CN) 설정, Steam 라이브러리.
+// 지역은 설치 폴더의 표시로 가린다: 중국판은 sdo\sdologin(SDO 로그인 모듈 — 런처는 글로벌판과 같은 ffxivboot.exe 라 먼저 본다),
+// 한국판은 boot\FFXIV_Boot.exe(액토즈), 글로벌판은 boot\ffxivboot.exe / ffxivlauncher64.exe. 대만판은 확실한 표시를 몰라
+// 지역을 비워 두고 사용자가 고르게 한다.
 internal sealed record DetectedClient(string InstallDir, Region? Region, string? Version, string Source);
 
 internal static class ClientLocator
@@ -38,7 +39,8 @@ internal static class ClientLocator
         }
 
         foreach (string dir in UninstallLocations()) Add(dir, "설치 기록");
-        Add(XivLauncherGamePath(), "XIVLauncher 설정");
+        Add(XivLauncherGamePath("XIVLauncher"), "XIVLauncher 설정");
+        Add(XivLauncherGamePath("XIVLauncherCN"), "XIVLauncherCN 설정");
         foreach (string lib in SteamLibraries()) Add(Path.Combine(lib, "steamapps", "common", "FINAL FANTASY XIV Online"), "Steam");
 
         return found
@@ -52,9 +54,20 @@ internal static class ClientLocator
             .ToList();
     }
 
-    // 설치 폴더의 boot\ 런처로 지역 판별 (모르면 null)
+    // 기본으로 고르는(GUI 체크, detect --save) 지역: 이 도구가 설치하는 해루봇의 한국·글로벌 서버용 플러그인의 지역.
+    // 중국·대만판은 찾아서 보여 주되 사용자가 고를 때만 쓴다 — 해루봇의 중국판은 별도 플러그인(TundraWork)이라 이 도구의 결과를
+    // 쓰지 않고, 클라이언트가 늘면 시그니처를 그 exe 에도 맞춰야 하고 CSV 추출 등 시간도 든다.
+    public static bool SelectedByDefault(Region? region) => region == Region.Global || region == Region.Korean;
+
+    // 설치 폴더로 추정한 지역이 적어 둔 지역과 확실히 다른지 (경고·화면 표시용). 글로벌로 추정된 것은 런처만 보고 정한 것이라
+    // 중국·대만판으로 적혀 있으면 다르다고 하지 않는다 (sdo 표시가 없는 중국판, 표시를 모르는 대만판)
+    public static bool Contradicts(Region inferred, Region configured) =>
+        inferred != configured && !(inferred == Region.Global && (configured == Region.SimplifiedChinese || configured == Region.TraditionalChinese));
+
+    // 설치 폴더의 표시로 지역 판별 (모르면 null)
     public static Region? InferRegion(string installDir)
     {
+        if (Directory.Exists(Path.Combine(installDir, "sdo", "sdologin"))) return Region.SimplifiedChinese;
         string boot = Path.Combine(installDir, "boot");
         if (File.Exists(Path.Combine(boot, "FFXIV_Boot.exe"))) return Region.Korean;
         if (File.Exists(Path.Combine(boot, "ffxivboot.exe")) || File.Exists(Path.Combine(boot, "ffxivlauncher64.exe")))
@@ -74,7 +87,8 @@ internal static class ClientLocator
         return paths;
     }
 
-    // 프로그램 추가/제거 기록 중 FINAL FANTASY XIV 의 설치 위치
+    // 프로그램 추가/제거 기록 중 FINAL FANTASY XIV 의 설치 위치 (중국판은 "最终幻想14", 설치 위치가 없으면 아이콘 경로
+    // ...\boot\ffxivboot.exe 에서)
     private static IEnumerable<string> UninstallLocations()
     {
         if (!OperatingSystem.IsWindows()) yield break;
@@ -97,9 +111,11 @@ internal static class ClientLocator
                     try
                     {
                         using var app = root.OpenSubKey(name);
-                        if (app?.GetValue("DisplayName") is not string display || !display.Contains("FINAL FANTASY XIV", StringComparison.OrdinalIgnoreCase))
+                        if (app?.GetValue("DisplayName") is not string display ||
+                            !(display.Contains("FINAL FANTASY XIV", StringComparison.OrdinalIgnoreCase) || display.Contains("最终幻想", StringComparison.Ordinal)))
                             continue;
                         if (app.GetValue("InstallLocation") is string loc && loc.Length > 0) found.Add(loc);
+                        else if (app.GetValue("DisplayIcon") is string icon && InstallDirOfIcon(icon) is { } dir) found.Add(dir);
                     }
                     catch (Exception ex) when (ex is System.Security.SecurityException || Errors.IsFileError(ex)) { }
                 }
@@ -109,9 +125,23 @@ internal static class ClientLocator
         foreach (string loc in found) yield return loc;
     }
 
-    private static string? XivLauncherGamePath()
+    // "...\boot\ffxivboot.exe,0" -> 설치 폴더 (boot 의 위). boot 안이 아니면 그 경로 그대로 (Add 가 확인한다)
+    internal static string? InstallDirOfIcon(string icon)
     {
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "XIVLauncher", "launcherConfigV3.json");
+        string path = icon.Split(',')[0].Trim().Trim('"');
+        try
+        {
+            string? boot = Path.GetDirectoryName(path);
+            return boot != null && Path.GetFileName(boot).Equals("boot", StringComparison.OrdinalIgnoreCase) ? Path.GetDirectoryName(boot)
+                : path.Length > 0 ? path : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException) { return null; }
+    }
+
+    // XIVLauncher(글로벌) / XIVLauncherCN(중국판) 의 게임 경로 설정
+    private static string? XivLauncherGamePath(string folder)
+    {
+        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), folder, "launcherConfigV3.json");
         if (!File.Exists(path)) return null;
         try
         {

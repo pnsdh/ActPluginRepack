@@ -29,6 +29,7 @@ internal sealed partial class HomeViewModel : ObservableObject
     [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowRefresh))] private bool _canFix = true;
     public bool ShowRefresh => !CanFix;
     [ObservableProperty] private bool _canRestore;
+    [ObservableProperty] private bool _hasSources; // 지난 확인의 출처 보고가 있으면 [출처]
     [ObservableProperty] private string _details = "";
     [ObservableProperty] private string? _notice; // 버튼을 누르기 전에 막힌 이유 (ACT 실행 중 등)
     [ObservableProperty] private string? _info;   // 다른 화면에서 넘어온 알림 (깨진 설정 파일을 보관함 등)
@@ -45,7 +46,11 @@ internal sealed partial class HomeViewModel : ObservableObject
     {
         Notice = null;
         // 작업 폴더나 ACT 파일을 읽지 못해도(권한, 잠긴 파일 등) 화면이 오류로 멈추지 않고 그 이유를 보인다
-        try { Show(Status.Collect(AppState.Workspace)); }
+        try
+        {
+            HasSources = SourcesViewModel.Available(AppState.Workspace);
+            Show(Status.Collect(AppState.Workspace));
+        }
         catch (Exception ex) when (Errors.Recoverable(ex))
         {
             CanRestore = false;
@@ -166,4 +171,7 @@ internal sealed partial class HomeViewModel : ObservableObject
 
     [RelayCommand]
     private void OpenHelp() => Navigator.Show(new HelpViewModel());
+
+    [RelayCommand]
+    private static void OpenSources() => Navigator.Show(new SourcesViewModel(Navigator.ShowStart));
 }

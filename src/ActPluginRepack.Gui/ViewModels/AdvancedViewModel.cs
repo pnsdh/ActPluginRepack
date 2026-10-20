@@ -21,6 +21,10 @@ internal sealed partial class AdvancedViewModel : ObservableObject
         LoadConfigOptions();
         _idaTarget = _idaTargetDefault;
         foreach (var source in SourceOptions()) Sources.Add(source);
+        // 지난번에 고른 작업과 옵션 (gui.json) — 바꿀 때마다 저장한다
+        Apply(AppState.Settings.Options ?? new AdvancedOptions());
+        PropertyChanged += (_, e) => OnOptionChanged(e.PropertyName);
+        foreach (var source in Sources) source.PropertyChanged += (_, _) => OnOptionChanged(nameof(Sources));
         RefreshStatus();
     }
 
@@ -36,9 +40,9 @@ internal sealed partial class AdvancedViewModel : ObservableObject
         ("opcodediff", "opcodediff diff",
          "xivdev/opcodediff 가 공개한 '직전 버전 → 이번 버전' opcode 대응표를 직전 목록에 적용합니다. 로컬 opcodediff 와 같은 스크립트의 결과라, 로컬 opcodediff 를 못 돌렸을 때 씁니다."),
         ("ida", "IDA",
-         "IDA 로 exe 를 분석해 직접 추출합니다(약 5분, 기본은 같은 버전 중국판 exe 한 번). IDA 9 이상이 필요하며, 앞의 출처가 모두 없을 때 씁니다(간편 모드에서는 쓰지 않음)."),
+         "IDA 로 exe 를 분석해 직접 추출합니다(약 5분, 기본은 같은 버전 중국판 exe 한 번). IDA 9 이상이 필요하며, 앞의 출처가 모두 없을 때 씁니다(간편 모드에서는 쓰지 않음). 'IDA 결과 우선'이나 교차 확인을 고르면 항상 돌립니다."),
         ("oxidizer", "xiv-data-oxidizer",
-         "설치된 클라이언트에서 직접 추출합니다(git + Rust 필요, 설정에서 켜야 함). 결과는 SharpVision 과 같습니다."),
+         "설치된 클라이언트에서 직접 추출합니다(git + Rust 필요). 평소에는 설정에서 켰을 때 SharpVision 대신 쓰고, 교차 확인 때는 설정에 없어도 받아서 빌드해 SharpVision 과 견줍니다. 결과는 SharpVision 과 같습니다."),
         ("sharpvision", "SharpVision",
          "설치된 클라이언트에서 직접 추출합니다. 설정에 경로가 없으면 최신 릴리스를 받아 씁니다."),
         ("datamining", "datamining 저장소",
@@ -80,7 +84,71 @@ internal sealed partial class AdvancedViewModel : ObservableObject
         if (!HasIda) ForceIda = false;
         // IDA 분석 대상을 직접 바꾸지 않았으면(옛 기본값 그대로) 설정의 새 기본값을 따른다
         if (IdaTarget == oldIdaDefault) IdaTarget = _idaTargetDefault;
+        OnPropertyChanged(nameof(NonDefaultText));
         RefreshStatus();
+    }
+
+    // ---- 고른 것 저장 ----
+
+    private bool _applying; // Apply 하는 동안은 하나하나 저장하지 않는다
+
+    // gui.json 에 저장하는 것 (AdvancedOptions 의 속성 + 데이터 소스). 캐시 무시·패치 번호는 저장하지 않는다
+    private static readonly HashSet<string> SavedProperties =
+    [
+        nameof(UpdatePlugin), nameof(Sigcheck), nameof(Repair), nameof(Opcodes), nameof(Csv), nameof(ForceIda), nameof(IdaTarget),
+        nameof(ServerExe), nameof(ServerAllRegions), nameof(CrossCheck), nameof(DoRsv), nameof(DoBuild), nameof(BuildCsv),
+        nameof(DoHotfix), nameof(DoInstall), nameof(InstallOfficial), nameof(InstallOverlay), nameof(Sources),
+    ];
+
+    private void OnOptionChanged(string? name)
+    {
+        if (name == nameof(Overwrite)) OnPropertyChanged(nameof(NonDefaultText));
+        if (name == null || !SavedProperties.Contains(name)) return;
+        OnPropertyChanged(nameof(BuildCsvEnabled));
+        OnPropertyChanged(nameof(NonDefaultText));
+        if (_applying) return;
+        AppState.Settings.Options = Capture();
+        // 저장하지 못해도(백신 잠금 등) 고르는 것은 막지 않는다 — 이번 실행에서는 그대로 쓰고 기록만
+        try { AppState.Settings.Save(); }
+        catch (Exception ex) when (Errors.IsToolOrFileError(ex)) { Errors.WriteLog(ex, "gui advanced options"); }
+    }
+
+    private AdvancedOptions Capture() => new()
+    {
+        UpdatePlugin = UpdatePlugin, Sigcheck = Sigcheck, Repair = Repair, Opcodes = Opcodes, Csv = Csv, ForceIda = ForceIda,
+        IdaTarget = IdaTarget == _idaTargetDefault ? null : IdaTarget, // 설정의 기본값을 따를 때는 적지 않는다
+        ServerExe = ServerExe, ServerAllRegions = ServerAllRegions, CrossCheck = CrossCheck,
+        DoRsv = DoRsv, DoBuild = DoBuild, BuildCsv = BuildCsv, DoHotfix = DoHotfix && ShowHotfix, DoInstall = DoInstall,
+        InstallOfficial = InstallOfficial, InstallOverlay = InstallOverlay,
+        DisabledSources = Sources.Where(s => !s.IsChecked).Select(s => s.Name).ToList(),
+    };
+
+    private void Apply(AdvancedOptions o)
+    {
+        _applying = true;
+        try
+        {
+            UpdatePlugin = o.UpdatePlugin; Sigcheck = o.Sigcheck; Repair = o.Repair; Opcodes = o.Opcodes; Csv = o.Csv;
+            ForceIda = o.ForceIda && HasIda; // 쓸 수 없게 된 도구의 "우선"은 남기지 않는다
+            IdaTarget = o.IdaTarget is { } t && IdaTargets.Any(x => x.Key == t) ? t : _idaTargetDefault;
+            ServerExe = o.ServerExe; ServerAllRegions = o.ServerAllRegions; CrossCheck = o.CrossCheck;
+            DoRsv = o.DoRsv; DoBuild = o.DoBuild; BuildCsv = o.BuildCsv; DoHotfix = o.DoHotfix && ShowHotfix; DoInstall = o.DoInstall;
+            InstallOfficial = o.InstallOfficial; InstallOverlay = o.InstallOverlay;
+            foreach (var s in Sources) s.IsChecked = !(o.DisabledSources ?? []).Contains(s.Name); // (손으로 고친 gui.json 의 null)
+        }
+        finally { _applying = false; }
+    }
+
+    // 기본과 다른 선택 한 줄 (없으면 숨김) — 저장된 선택이 다음 패치 날까지 남아 결과를 조용히 바꾸지 않게 보인다
+    public string? NonDefaultText
+    {
+        get
+        {
+            var list = Capture().Differences(name => Sources.FirstOrDefault(s => s.Name == name)?.Label ?? name,
+                                             region => IdaTargets.FirstOrDefault(x => x.Key == region).Value ?? region, HasIda);
+            if (Overwrite) list.Add("캐시 무시");
+            return list.Count > 0 ? $"기본과 다른 선택: {string.Join(", ", list)}" : null;
+        }
     }
 
     // 설정(config.json)에 따라 달라지는 것: 직접 추출 도구를 쓸 수 있는지, IDA 분석 대상 기본값
@@ -99,22 +167,26 @@ internal sealed partial class AdvancedViewModel : ObservableObject
         }.Where(x => x != null)) is { Length: > 0 } hint ? hint : null;
     }
 
-    // 작업 (하나도 고르지 않으면 [선택한 작업 실행]을 누를 수 없다)
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _updatePlugin = true;
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _sigcheck = true;
-    [ObservableProperty] private bool _repair = true;
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _opcodes = true;
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _csv = true;
+    // 작업 (하나도 고르지 않으면 [선택한 작업 실행]을 누를 수 없다). 처음 값은 AdvancedOptions (Apply)
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _updatePlugin;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _sigcheck;
+    [ObservableProperty] private bool _repair;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _opcodes;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _csv;
     [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _doRsv;
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _doBuild = true;
-    [ObservableProperty] private bool _buildCsv = true;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _doBuild;
+    [ObservableProperty] private bool _buildCsv;
+    // 공식 패치 서버 exe 로 준비하면 build 는 이름 데이터를 넣지 않으므로 다시 변환할 것이 없다
+    public bool BuildCsvEnabled => DoBuild && !(ServerExe && AnyPrepare);
     [ObservableProperty, NotifyPropertyChangedFor(nameof(InstallOverlayEnabled)), NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _doInstall;
     // 설치 옵션: 고친 플러그인 대신 공식 최신본(input\plugin), OverlayPlugin opcode 도 넣기 (공식본 설치는 OverlayPlugin 을 건드리지 않음)
     [ObservableProperty, NotifyPropertyChangedFor(nameof(InstallOverlayEnabled))] private bool _installOfficial;
-    [ObservableProperty] private bool _installOverlay = true;
+    [ObservableProperty] private bool _installOverlay;
     public bool InstallOverlayEnabled => DoInstall && !InstallOfficial;
     [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _doHotfix;
     public bool ShowHotfix => AppState.Settings.Hotfix; // 설정의 "고친 플러그인 배포 기능"을 켰을 때만
+    // 배포 묶음의 패치 번호 (비우면 게임 버전에서 — 패치 당일에는 대응표가 아직 없어 직접 적어야 할 수 있다). 저장하지 않는다
+    [ObservableProperty] private string _hotfixTag = "";
 
     // 옵션
     [ObservableProperty] private bool _forceIda;
@@ -128,6 +200,11 @@ internal sealed partial class AdvancedViewModel : ObservableObject
             .Select(r => new KeyValuePair<string, string>(r.Name, $"{r.Label} exe{(r.Name == AppConfig.DefaultIdaTarget ? " (기본)" : "")}"))
             .ToList();
     [ObservableProperty] private bool _overwrite;
+    // 내 게임 대신 공식 패치 서버의 최신 exe 로 준비 (게임 데이터는 받을 수 없어 CSV 수집은 하지 않음)
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CsvEnabled)), NotifyCanExecuteChangedFor(nameof(RunCommand))] private bool _serverExe;
+    public bool CsvEnabled => !ServerExe;
+    [ObservableProperty] private bool _serverAllRegions; // 그때 설치하지 않은 지역(글로벌·한국·중국)의 exe 도 받아 점검
+    [ObservableProperty] private bool _crossCheck;       // 가능한 모든 수단으로 교차 확인 (배포 전 점검)
     [ObservableProperty] private bool _hasIda;
     [ObservableProperty] private bool _hasLocalDiff;
     // 직접 추출을 못 고르는 이유 (도구를 찾지 못함 / 꺼 둠)
@@ -138,7 +215,8 @@ internal sealed partial class AdvancedViewModel : ObservableObject
     // 실행 버튼을 누르기 전에 막힌 이유 (ACT 실행 중 등 — 없으면 숨김)
     [ObservableProperty] private string? _notice;
 
-    public bool AnyPrepare => UpdatePlugin || Sigcheck || Opcodes || Csv;
+    // (공식 패치 서버 exe 로 준비하면 CSV 는 하지 않으므로 꺼진 채 체크된 CSV 는 치지 않는다)
+    public bool AnyPrepare => UpdatePlugin || Sigcheck || Opcodes || (Csv && !ServerExe);
     private bool AnySelected => AnyPrepare || DoRsv || DoBuild || DoHotfix || DoInstall;
 
     // 모두 체크돼 있으면 제한 없음(빈 목록), 아니면 체크된 것만
@@ -148,10 +226,10 @@ internal sealed partial class AdvancedViewModel : ObservableObject
     [RelayCommand]
     private void ResetDefaults()
     {
-        UpdatePlugin = Sigcheck = Repair = Opcodes = Csv = DoBuild = BuildCsv = InstallOverlay = true;
-        DoRsv = DoInstall = InstallOfficial = DoHotfix = ForceIda = Overwrite = false;
-        IdaTarget = _idaTargetDefault;
-        foreach (var s in Sources) s.IsChecked = true;
+        Apply(new AdvancedOptions());
+        Overwrite = false;
+        HotfixTag = "";
+        OnOptionChanged(nameof(Sources)); // 한 번에 저장
     }
 
     [ObservableProperty, NotifyPropertyChangedFor(nameof(GitHubTip))] private string _gitHubText = "GitHub API 확인 중...";
@@ -201,6 +279,19 @@ internal sealed partial class AdvancedViewModel : ObservableObject
     {
         if (!AnySelected) return;
         Notice = null;
+        // 배포 묶음의 패치 번호가 틀렸으면 (수 분 걸리는 준비·빌드를 다 한 뒤가 아니라) 지금 알린다
+        if (DoHotfix && HotfixTag.Trim() is { Length: > 0 } tag && HotfixPackage.TagProblem(tag) is { } problem)
+        {
+            Notice = problem;
+            return;
+        }
+        // 준비를 다시 하지 않으면 지금 기록으로 패치 번호를 구할 수 있는지 미리 본다 (못 구하면 빌드·설치를 다 한 뒤에야 알게 된다)
+        if (DoHotfix && HotfixTag.Trim().Length == 0 && !AnyPrepare && MaterialState.Load(AppState.Workspace) is { } prepared &&
+            HotfixPackage.PatchTag(prepared.GameVersions) == null)
+        {
+            Notice = "게임 버전에 맞는 패치 번호를 알 수 없습니다(대응표가 아직 갱신되지 않음). hotfix 아래의 패치 번호 칸에 7.58 처럼 적으세요.";
+            return;
+        }
         var steps = Jobs.SelectedSteps(this).ToList();
         Func<RunViewModel, CancellationToken, Task> job = (vm, ct) => Jobs.RunSelected(this, vm, ct);
         if (DoInstall) Navigator.TryShowRun(Titles.Selected, steps, job, n => Notice = n);
@@ -219,4 +310,7 @@ internal sealed partial class AdvancedViewModel : ObservableObject
 
     [RelayCommand]
     private void OpenWorkspace() => Shell.Open(AppState.Workspace.Root);
+
+    [RelayCommand]
+    private static void OpenSources() => Navigator.Show(new SourcesViewModel(Navigator.ShowStart));
 }

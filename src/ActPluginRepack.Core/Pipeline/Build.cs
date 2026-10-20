@@ -46,14 +46,23 @@ internal static class Build
     {
         string pluginPath = Path.GetFullPath(o.Plugin ?? ws.PluginPath);
         var config = Config.Load(ws.Root);
-        var warnings = new List<string>(config.ClientErrors.Select(e => $"{Config.FileName}: {e} 이 클라이언트는 시그니처 검증에서 뺍니다."));
+        var state = MaterialState.Load(ws);
+        bool fromServer = state?.FromServer == true;
+        // (공식 패치 서버 exe 로 준비했으면 받아 둔 exe 로 검증하므로 설정의 경로 오류는 검증과 상관없다 — 서버에서 받지 못하는
+        //  지역(대만판)만 설치된 클라이언트로 검증하므로 그 오류는 알린다)
+        var warnings = new List<string>(config.ClientErrors
+            .Where(e => !fromServer || Region.All.Any(r => !Thaliak.Supports(r) && e.StartsWith(r.Name + ":", StringComparison.Ordinal)))
+            .Select(e => $"{Config.FileName}: {e} 이 클라이언트는 시그니처 검증에서 뺍니다."));
 
         // 0) 재료가 지금 게임/플러그인 것인지 — prepare 기록과 비교. 최신 버전이 아니라 prepare 가 뺀 클라이언트는
         //    (그 뒤로 그대로면) 시그니처 검증에서도 뺀다 — 옛 exe 에는 새 시그니처가 맞지 않는다.
-        var state = MaterialState.Load(ws);
-        var clients = config.Clients.Where(c => state?.IsOutdated(c) != true).ToList();
-        foreach (var c in config.Clients.Except(clients))
-            Log.Note($"[build] {c.Name}: 게임이 최신 버전이 아니라 prepare 에서 뺀 클라이언트 - 시그니처 검증 생략");
+        //    공식 패치 서버의 exe 로 준비했으면 그 exe 로 검증하고, 이름 데이터(CSV)는 넣지 않는다 (prepare 가 만들지 않음).
+        var clients = state?.ClientsUsed(ws, config.Clients) ?? config.Clients;
+        if (fromServer)
+            Log.Note("[build] 마지막 prepare 는 공식 패치 서버의 최신 exe 로 준비함 - 그 exe 로 시그니처를 검증하고, 이름 데이터는 플러그인 내장값");
+        else
+            foreach (var c in config.Clients.Except(clients))
+                Log.Note($"[build] {c.Name}: 게임이 최신 버전이 아니라 prepare 에서 뺀 클라이언트 - 시그니처 검증 생략");
         if (state != null)
         {
             foreach (string d in state.Differences(pluginPath, config.Clients))
@@ -71,7 +80,7 @@ internal static class Build
         Operation.ThrowIfCancelled();
 
         // 1) CSV -> data (false: 이번 빌드에는 data\ 를 넣지 않음 — 지난 빌드의 data 가 남아 있어도)
-        bool useData = !o.Csv || BuildData(ws, o, config, clients, pluginPath, warnings);
+        bool useData = !fromServer && (!o.Csv || BuildData(ws, o, config, clients, pluginPath, warnings));
 
         // 2) 교체할 시그니처가 있으면 config.json 의 클라이언트에서 실제로 맞는지 먼저 확인
         string? sigDir = ExistingOrNull(ws.SignaturesDir);

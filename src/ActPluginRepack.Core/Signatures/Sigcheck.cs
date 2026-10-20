@@ -39,6 +39,8 @@ internal static class Sigcheck
 
         // 클라이언트마다 실제로 쓰일 시그니처 (그룹마다 쓰일 수 있는 첫 행 — 깨진 그룹은 없음). 조용한 어긋남 검사(SignatureDrift)가 쓴다.
         public IReadOnlyList<(GameClient Client, Row Row)> InUse { get; init; } = [];
+        // 클라이언트마다 그 클라이언트에 해당하는 원래(공식 플러그인·deucalion — input 아닌) 패턴들. 교차 확인이 쓴다.
+        public IReadOnlyList<(GameClient Client, Row Row)> Official { get; init; } = [];
     }
 
     public static Result Execute(string pluginPath, string sigDir, List<GameClient> clients)
@@ -47,12 +49,15 @@ internal static class Sigcheck
         var broken = new List<Broken>();
         var officialBroken = new HashSet<Item>();
         var inUse = new List<(GameClient, Row)>();
+        var official = new List<(GameClient, Row)>();
         foreach (var client in clients)
         {
             Operation.ThrowIfCancelled();
             Log.Info();
             Log.Section($"[{client.Name}] {client.Version ?? "(버전 모름)"}  {client.ExePath}");
-            var (b, ob, used) = Check(client, rows.Where(r => Applies(r.Item, client.Region)).ToList());
+            var applies = rows.Where(r => Applies(r.Item, client.Region)).ToList();
+            official.AddRange(applies.Where(r => r.Source != SignatureSources.Input).Select(r => (client, r)));
+            var (b, ob, used) = Check(client, applies);
             broken.AddRange(b);
             officialBroken.UnionWith(ob);
             inUse.AddRange(used.Select(r => (client, r)));
@@ -69,7 +74,7 @@ internal static class Sigcheck
         if (criticalOk && warn == 0) Log.Done("[sigcheck] 모두 정상");
         else if (criticalOk) Log.Warn($"[sigcheck] 후크 정상, 메모리/Oodle 시그니처 {warn}개 깨짐 (경고)");
         else Log.Error($@"[sigcheck] 깨진 후크 있음 - input\signatures\{SignatureInput.FileName} 에 '이름|패턴' 줄을 넣을 것");
-        return new Result(criticalOk, broken, officialBroken.ToList(), obsolete) { InUse = inUse };
+        return new Result(criticalOk, broken, officialBroken.ToList(), obsolete) { InUse = inUse, Official = official };
     }
 
     // 일치 하나가 가리키는 곳 (자동 복구의 후보 검증, replay 의 후크 비교가 같은 규칙으로): call 형은 따라간 대상

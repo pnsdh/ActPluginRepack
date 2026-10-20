@@ -10,7 +10,7 @@
 //   data\              CSV 에서 만든 리스트 (build 가 매번 다시 만듦)
 //   output\            완성된 플러그인
 //   snapshots\<지역>\<버전>\  게임 exe 보관 (다음 패치 때 비교용), opcodediff / IDA 캐시
-//   extras\            다른 도구용 opcode (lemegeton.xml / OverlayPlugin\opcodes.jsonc)
+//   extras\            다른 도구용·확인용 (lemegeton.xml / OverlayPlugin\opcodes.jsonc / Machina\<지역>.txt / sources.txt / crosscheck\)
 //   tools\             받아 둔 외부 도구와 캐시
 //   backups\<시각>\    ACT 에 설치하기 전 원래 파일 (install / restore)
 //   hotfix\<패치>\     패치본 배포 묶음 (hotfix)
@@ -35,6 +35,8 @@ internal sealed record Workspace(string Root)
     public string ExtrasDir => Path.Combine(Root, "extras");
     public string LemegetonPath => Path.Combine(ExtrasDir, "lemegeton.xml");
     public string OverlayOpcodesPath => Path.Combine(ExtrasDir, "OverlayPlugin", Install.OverlayOpcodes);
+    public string MachinaOpcodesDir => Path.Combine(ExtrasDir, "Machina");
+    public string CrossCheckDir => Path.Combine(ExtrasDir, "crosscheck"); // 교차 확인한 출처마다의 opcode
     public string ToolsDir => Path.Combine(Root, "tools");
     public string BackupsDir => Path.Combine(Root, "backups");
     public string LogsDir => Path.Combine(Root, "logs");

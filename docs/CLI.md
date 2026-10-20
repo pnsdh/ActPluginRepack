@@ -8,7 +8,10 @@
    저장소 밖에서는 작업 폴더를 `--root` 로 준다(GUI 와 같은 데이터: PowerShell 에서 `--root $env:LOCALAPPDATA\ActPluginRepack`).
    `--root` 를 줘도 받은 파일의 HTTP 캐시와 GitHub 토큰은 사용자 폴더(`%LOCALAPPDATA%\ActPluginRepack\cache\http` 등)를 같이 쓴다.
 2. 게임 클라이언트 경로를 설정한다: `detect --save` 가 설치된 클라이언트를 찾아 `config.json` 에 적는다(기본 설치 경로,
-   설치 기록, XIVLauncher, Steam). 못 찾으면 `config.example.json` 을 `config.json` 으로 복사해 직접 적는다.
+   설치 기록, XIVLauncher / XIVLauncherCN, Steam). 지역은 설치 폴더로 가린다(중국판 `sdo\sdologin`, 한국판
+   `boot\FFXIV_Boot.exe`, 글로벌판 `boot\ffxivboot.exe`). 저장하는 것은 한국·글로벌뿐이다 — 중국판은 찾아도 이미 적어 둔
+   것만 고치므로, 쓰려면 직접 적거나 화면(게임 위치 설정)에서 체크한다. 대만판은 지역을 가릴 수 없어 직접 적는다.
+   못 찾으면 `config.example.json` 을 `config.json` 으로 복사해 직접 적는다.
 3. **ACT 와 게임을 끄고** 실행한다:
    ```powershell
    .\build.ps1 -Prepare -Install
@@ -44,7 +47,9 @@ dotnet $cli restore     # 마지막 설치 하나를 그 직전으로 (개발·�
 ```
 
 - `clients` 의 키는 지역: `global` / `korean` / `simplified-chinese` / `traditional-chinese`. 가진 클라이언트만 적는다.
-  경로는 설치 폴더 / `game` 폴더 / `ffxiv_dx11.exe` 아무거나. `\` 는 `\\` 로 쓴다.
+  경로는 설치 폴더 / `game` 폴더 / `ffxiv_dx11.exe` 아무거나. `\` 는 `\\` 로 쓴다. 적은 클라이언트는 모두 확인에 쓴다 —
+  중국판을 넣으면 opcode·CSV 를 그 클라이언트에서 직접 구하고, 시그니처는 그 exe 에도 맞는 것만 쓴다(메모리 시그니처와 패킷
+  후크를 글로벌·한국과 같이 쓰므로). 해루봇의 중국 서버용 플러그인은 별도 플러그인이라 설치는 여전히 한국·글로벌 서버용에만 한다.
 - `sharpVision` (선택): 직접 빌드한 [SharpVision](https://github.com/pnsdh/SharpVision) 실행 파일(.exe 또는 .dll).
   보통은 **적지 않는다** — `prepare` 가 GitHub 최신 릴리스를 `tools\SharpVision\<버전>\` 에 받아 쓴다(새 릴리스가 나오면
   새로 받고 이전 것은 지움).
@@ -52,7 +57,7 @@ dotnet $cli restore     # 마지막 설치 하나를 그 직전으로 (개발·�
   추출한다(결과는 SharpVision 과 바이트 단위로 같음). 릴리스 바이너리가 없어 소스를 빌드하므로 **git 과 Rust**
   ([rustup](https://rustup.rs))가 필요하다. `true` 면 `tools\xiv-data-oxidizer\` 에 받아 실행마다 소스·스키마
   ([EXDSchema](https://github.com/xivdev/EXDSchema))를 갱신하고, 문자열이면 직접 관리하는 clone 폴더(빌드만 하고 git 은
-  건드리지 않음). 실패하면 SharpVision 으로 넘어간다.
+  건드리지 않음). 실패하면 SharpVision 으로 넘어간다. 교차 확인(`--cross-check`) 때는 설정에 없어도 받아서 빌드해 SharpVision 과 견준다.
 - `localDiff` (선택, 기본 켜짐): opcode 공개 전에 opcodediff 를 로컬에서 실행한다
   ([opcodediff 로컬 실행](HowItWorks.md#opcodediff-로컬-실행)). 끄려면 `false`. `python` 으로 쓸 Python(3.12 이상) 경로를
   지정할 수 있다.
@@ -71,6 +76,7 @@ dotnet $cli restore     # 마지막 설치 하나를 그 직전으로 (개발·�
 ```powershell
 $cli = 'src\ActPluginRepack.Cli\bin\Release\net10.0\ActPluginRepack.dll'   # 배포본은 cli\ActPluginRepack.exe --root <작업 폴더>
 dotnet $cli status                                   # 지금 상태와 다음에 할 일
+dotnet $cli sources                                  # 마지막 prepare 의 출처 보고 (opcode 대조 결과, 교체 시그니처, CSV)
 dotnet $cli detect --save                            # 설치된 게임 클라이언트를 찾아 config.json 에
 dotnet $cli prepare                                  # 재료 준비 + 패치 필요 여부 판단
 dotnet $cli build                                    # output\ 에 플러그인 만들기
@@ -95,7 +101,9 @@ dotnet $cli replay --version 2026.10.06.0000.0000    # (개발용) 지난 패치
 ```
 
 **prepare 옵션**: `--plugin <경로>` / `--no-plugin` / `--no-csv` / `--no-opcodes` / `--no-snapshot` / `--no-sigcheck` /
-`--no-repair` / `--ida` (IDA 로 직접 추출해 그 결과를 우선) / `--ida-target <지역>` / `--overwrite`
+`--no-repair` / `--server-exe` (설치된 게임 대신 그 지역의 공식 패치 서버 최신 exe 로, CSV 없이 —
+[공식 패치 서버 exe 로 준비](HowItWorks.md#공식-패치-서버-exe-로-준비)) / `--all-regions` (`--server-exe` 에서 설치하지 않은 지역(글로벌·한국·중국)의 exe 도 점검) / `--cross-check` (배포 전 점검: 모든 출처·수단을 돌려 서로 맞는지 —
+[교차 확인](HowItWorks.md#교차-확인)) / `--ida` (IDA 로 직접 추출해 그 결과를 우선) / `--ida-target <지역>` / `--overwrite`
 (SharpVision·oxidizer·IDA 캐시와 받은 파일 기억을 무시하고 다시) / `--sources a,b` (쓸 출처 제한, 검증용 — CSV:
 `oxidizer`·`sharpvision`·`datamining`·`xivdata`, opcode: `yarukon`·`opcodediff`·`localdiff`·`ida`·`karashiiro`, 시그니처 복구:
 `upstream`·`sigregen`; 한 분류의 이름이 없으면 그 분류는 전부 사용).
@@ -174,7 +182,7 @@ Ctrl+C 는 진행 중인 작업을 취소한다(받던 파일, 외부 프로그�
 
 - `summary.txt`: 프로그램·Windows·.NET 버전, 64비트·관리자 여부, 작업 폴더, `status` 와 같은 상태 줄과 다음에 할 일, 넣지 못한 것
 - `logs\`: 작업 기록 최근 10개, 오류 기록(`error.log`)
-- `state\`: `input\.state.json`, `output\.build.json`, `config.json`, `gui.json`, 자동 업데이트 일지, 최근 백업 기록
+- `state\`: `input\.state.json`, `input\.sources.json`(출처 보고), `output\.build.json`, `config.json`, `gui.json`, 자동 업데이트 일지, 최근 백업 기록
   5개(`backups\<시각>\backup.json`), `input\signatures\*.txt`, `input\opcodes` · `input\overrides` 파일 목록(이름·크기·SHA256)
 - `act.txt`: ACT 설정의 플러그인 목록, 설치 대상, FFXIV 플러그인 폴더(해루봇 언어 폴더 포함)의 파일 목록(크기·수정 시각·버전·SHA256),
   OverlayPlugin `opcodes.jsonc`

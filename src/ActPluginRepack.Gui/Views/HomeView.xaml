@@ -42,6 +42,9 @@
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="{Binding Details, Converter={StaticResource KeepAll}}" Style="{StaticResource Caption}" FontSize="13" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <ui:Button Content="{x:Static gui:Titles.Sources}" Icon="{ui:SymbolIcon DocumentSearch24}" Appearance="Transparent"
+                                   Command="{Binding OpenSourcesCommand}" Visibility="{Binding HasSources, Converter={StaticResource Visible}}"
+                                   ToolTip="지난 확인에서 무엇을 어디서 가져왔는지 봅니다. 문제를 보고하거나 자세히 확인할 때 보는 정보라, 평소에는 보지 않아도 됩니다." />
                         <ui:Button Content="{x:Static gui:Titles.Restore}" Icon="{ui:SymbolIcon ArrowUndo24}" Appearance="Transparent"
                                    Command="{Binding RestoreCommand}"
                                    ToolTip="이 프로그램이 고친 플러그인 대신 공식 FFXIV 플러그인을 ACT 에 설치합니다. 고친 플러그인으로 문제가 생겼을 때 누르세요."

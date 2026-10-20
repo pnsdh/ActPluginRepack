@@ -14,6 +14,10 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
     private bool _sharpVisionTried;
     private string? _sharpVision;
 
+    // 언어 폴더(input\csv\<leaf>) -> 이번에 받은 출처 (출처 보고용). 못 구한 언어는 그렇다고
+    private readonly Dictionary<string, string> _sources = new(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyDictionary<string, string> Sources => _sources;
+
     public void Collect(GameClient client)
     {
         var region = client.Region!;
@@ -22,7 +26,7 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
             try
             {
                 string cache = Oxidizer.ExtractCsv(ws, oxidizer, client, overwrite);
-                CopySheets(region, leaf => Path.Combine(cache, leaf));
+                CopySheets(region, leaf => Path.Combine(cache, leaf), "xiv-data-oxidizer (설치된 게임에서 추출)");
                 return;
             }
             catch (Exception ex) when (Errors.Recoverable(ex)) { Log.Warn($"[csv] xiv-data-oxidizer 실패 - {Errors.Describe(ex)}"); }
@@ -52,8 +56,9 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
         ThrowIfStale(stale);
     }
 
-    private static void ThrowIfStale(List<string> leafs)
+    private void ThrowIfStale(List<string> leafs)
     {
+        foreach (string leaf in leafs) _sources[leaf] = "이번 버전 것을 구하지 못해 전에 받은 것을 그대로 씁니다.";
         if (leafs.Count > 0)
             throw new ToolException($@"{string.Join(", ", leafs.Select(l => $@"input\csv\{l}"))} 는 이번 게임 버전의 데이터를 구하지 못해 전에 받은 것을 그대로 둡니다. " +
                                     "빌드는 되지만 스킬·상태 이름이 지난 패치 것으로 들어갈 수 있으니 나중에 다시 실행하세요.");
@@ -97,11 +102,11 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
         if (missing.Count > 0)
             throw new ToolException($"SharpVision 으로 추출한 {src} 에 빠진 시트가 있습니다: {string.Join(", ", missing)}");
 
-        CopySheets(region, leaf => Path.Combine(src, region.SharpVisionLangs[Array.IndexOf(region.CsvLeafs, leaf)]));
+        CopySheets(region, leaf => Path.Combine(src, region.SharpVisionLangs[Array.IndexOf(region.CsvLeafs, leaf)]), "SharpVision (설치된 게임에서 추출)");
     }
 
     // 추출본의 필요한 시트만 input\csv\<leaf> 로
-    private void CopySheets(Region region, Func<string, string> sourceDir)
+    private void CopySheets(Region region, Func<string, string> sourceDir, string source)
     {
         foreach (string leaf in region.CsvLeafs)
         {
@@ -114,6 +119,7 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
                 File.Move(to + ".tmp", to, overwrite: true);
             }
             Log.Info($@"[csv] input\csv\{leaf} <- {CsvConverter.RequiredSheets.Length}개 시트");
+            _sources[leaf] = source;
         }
     }
 
@@ -151,6 +157,7 @@ internal sealed class CsvCollector(Workspace ws, AppConfig config, IReadOnlySet<
                 continue;
             }
             Log.Info($@"[csv] input\csv\{leaf} <- {sheets.Length}개 시트 ({src.Name})");
+            _sources[leaf] = status.Description;
             return true;
         }
         Log.Warn($@"[csv] {leaf}: 쓸 수 있는 공개 저장소 없음 (버전 불일치 또는 받기 실패) - input\csv\{leaf} 는 그대로 (나중에 다시 실행)");

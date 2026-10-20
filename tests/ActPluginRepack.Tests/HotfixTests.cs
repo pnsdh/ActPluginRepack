@@ -87,5 +87,50 @@ public class HotfixTests
         new BuildInfo(DateTime.Now, "3.0.3.3", [], true).Save(ws.OutputDir);
         var made = HotfixPackage.Create(ws, "7.57");
         Assert.True(File.Exists(made.ZipPath));
+        Assert.Contains(made.Warnings, w => w.Contains("교차 확인 없이"));
+    }
+
+    // 배포 전 점검: 교차 확인에서 다른 것이 있었으면 경고, 모두 일치했으면 릴리스 설명에 남긴다
+    [Fact]
+    public void CrossCheckResultGoesIntoWarningsAndNotes()
+    {
+        using var tmp = new TempDir();
+        var ws = new Workspace(tmp.Path);
+        tmp.File("config.json", """{ "ida": false }""");
+        tmp.File("input/plugin/FFXIV_ACT_Plugin.dll", FakeAssembly.WithVersion("FFXIV_ACT_Plugin", "3.0.3.3"));
+        tmp.File("output/FFXIV_ACT_Plugin.dll", "patched");
+        var prepared = new MaterialState(DateTime.Now.AddMinutes(-1), "3.0.3.3", [], [], HooksOkOfficially: true, PatchNeeded: true,
+                                         CrossCheck: ["글로벌", "Recv"]);
+        prepared.Save(ws);
+        var built = new BuildInfo(DateTime.Now, "3.0.3.3", [], true);
+        built.Save(ws.OutputDir);
+
+        var made = HotfixPackage.Create(ws, "7.57");
+        Assert.Contains(made.Warnings, w => w.Contains("다른 것이 있었습니다: 글로벌, Recv"));
+        Assert.DoesNotContain("### 확인", File.ReadAllText(made.NotesPath));
+
+        var clean = prepared with { CrossCheck = [] };
+        Assert.Contains("### 확인", HotfixPackage.Notes(ws, "7.57", clean, built, ["FFXIV_ACT_Plugin.dll"]));
+        Assert.DoesNotContain("### 확인", HotfixPackage.Notes(ws, "7.57", clean with { CrossCheck = null }, built, ["FFXIV_ACT_Plugin.dll"]));
+
+        // 대조하지 못한 것이 있으면 "확인"으로 적지 않고 경고한다 (하지 않은 분류, 짝이 없던 항목)
+        var partial = clean with { CrossCheckGaps = ["게임 데이터 (하지 않았거나 실패)"] };
+        Assert.DoesNotContain("### 확인", HotfixPackage.Notes(ws, "7.57", partial, built, ["FFXIV_ACT_Plugin.dll"]));
+        partial.Save(ws);
+        built.Save(ws.OutputDir);
+        Assert.Contains(HotfixPackage.Create(ws, "7.57").Warnings, w => w.Contains("대조하지 못한 것이 있습니다: 게임 데이터"));
+    }
+
+    [Theory]
+    [InlineData("7.58", true)]
+    [InlineData("7.58h1", true)]
+    [InlineData("7.58.", false)]
+    [InlineData("7 58", false)]
+    [InlineData("..", false)]
+    [InlineData("a/b", false)]
+    [InlineData("", false)]
+    public void PatchNumberRules(string tag, bool ok)
+    {
+        Assert.Equal(ok, HotfixPackage.TagProblem(tag) == null);
     }
 }

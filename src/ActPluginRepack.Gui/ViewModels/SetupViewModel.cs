@@ -30,7 +30,16 @@ internal sealed partial class SetupViewModel : ObservableObject
     public SetupViewModel(bool firstRun)
     {
         FirstRun = firstRun;
-        Clients.CollectionChanged += (_, _) => OnPropertyChanged(nameof(Intro));
+        Clients.CollectionChanged += (_, e) =>
+        {
+            // 지역·체크를 바꾸면 중국·대만 안내도 다시 (직접 추가한 줄은 다시 찾을 때 또 들어오므로 한 번만 붙인다)
+            foreach (ClientRow row in e.NewItems ?? Array.Empty<ClientRow>())
+            {
+                row.PropertyChanged -= OnRowChanged;
+                row.PropertyChanged += OnRowChanged;
+            }
+            OnPropertyChanged(nameof(Intro));
+        };
         Detect();
     }
 
@@ -40,11 +49,17 @@ internal sealed partial class SetupViewModel : ObservableObject
     [ObservableProperty] private bool _actFound;
     [ObservableProperty] private string? _error;
 
-    public string Intro => Clients.Count > 0
+    public string Intro => (Clients.Count > 0
         ? "이 컴퓨터에 설치된 파이널판타지14 를 찾았습니다. 쓰는 클라이언트에 체크하고 [저장]을 누르세요. 목록에 없으면 [폴더 직접 고르기]로 추가할 수 있습니다."
-        : "이 컴퓨터에서 파이널판타지14 를 자동으로 찾지 못했습니다. [폴더 직접 고르기]로 게임이 설치된 폴더를 고른 뒤 [저장]을 누르세요.";
+        : "이 컴퓨터에서 파이널판타지14 를 자동으로 찾지 못했습니다. [폴더 직접 고르기]로 게임이 설치된 폴더를 고른 뒤 [저장]을 누르세요.") +
+        (Clients.Any(c => c.Region != null && !ClientLocator.SelectedByDefault(c.Region) && !c.IsSelected)
+            ? "\n중국·대만 서버용 클라이언트는 기본으로 고르지 않습니다. 해루봇의 중국 서버용 플러그인은 이 프로그램이 고치지 않는 다른 플러그인입니다. " +
+              "이 프로그램이 고치는 FFXIV 플러그인을 그 서버에서도 확인하려면 체크하세요."
+            : "");
 
     private const string ManualSource = "직접 추가";
+
+    private void OnRowChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => OnPropertyChanged(nameof(Intro));
 
     [RelayCommand]
     private void Detect()
@@ -60,8 +75,28 @@ internal sealed partial class SetupViewModel : ObservableObject
         // 직접 추가한 줄은 다시 찾아도 남긴다 (자동으로 찾은 것과 겹치면 자동 쪽만)
         var manual = Clients.Where(r => r.Source == ManualSource).ToList();
         Clients.Clear();
+        // 처음 고를 때: 설정된 클라이언트가 있으면 그것만 체크한다 (일부러 뺀 것이 다시 들어가거나, 옛 설치 폴더가 같이 체크돼 같은 지역이
+        // 둘이 되어 저장이 막히지 않게). 설정이 비었으면 한국·글로벌을 지역마다 처음 찾은 하나씩
+        var firstOfRegion = new HashSet<string>();
+        // 설정에 적혀 있지만 경로가 틀린 지역 (게임을 옮겼거나 다시 설치함) — 새 위치에서 찾은 그 지역의 첫 줄을 체크한다
+        var broken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (string key in Config.RawClients(AppState.Workspace.Root).Keys)
+                if (current.All(c => !string.Equals(c.Region?.Name, key, StringComparison.OrdinalIgnoreCase))) broken.Add(key);
+        }
+        catch (Exception ex) when (Errors.IsToolOrFileError(ex)) { } // 설정 파일이 깨짐 — 위의 안내로
         foreach (var d in ClientLocator.Detect())
-            Clients.Add(new ClientRow(d.InstallDir, d.Region, d.Version, d.Source, selected: d.Region != null));
+        {
+            var written = current.FirstOrDefault(c => SameDir(InstallDirOf(c.ExePath), d.InstallDir))?.Region;
+            var region = written != null && (d.Region == null || !ClientLocator.Contradicts(d.Region, written)) ? written : d.Region;
+            // 적어 둔 지역과 달라 고친 줄(예전에 global 로 적힌 중국판)은 기본 규칙으로 — 중국·대만판은 체크하지 않고 안내를 보인다
+            bool selected = current.Count > 0
+                ? written != null ? region == written || ClientLocator.SelectedByDefault(region)
+                  : region != null && broken.Contains(region.Name) && firstOfRegion.Add(region.Name)
+                : ClientLocator.SelectedByDefault(d.Region) && firstOfRegion.Add(d.Region!.Name);
+            Clients.Add(new ClientRow(d.InstallDir, region, d.Version, d.Source, selected));
+        }
         // 이미 설정돼 있는데 자동으로 못 찾은 것도 보여 준다
         foreach (var c in current.Where(c => !Listed(InstallDirOf(c.ExePath))))
             Clients.Add(new ClientRow(InstallDirOf(c.ExePath), c.Region, c.Version, "현재 설정", selected: true));

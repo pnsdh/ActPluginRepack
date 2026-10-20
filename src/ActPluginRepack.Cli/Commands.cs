@@ -19,6 +19,18 @@ internal static class Commands
         return ExitCodes.Ok;
     }
 
+    // 마지막 prepare 의 출처 보고 (extras\sources.txt 와 같은 내용)
+    public static int Sources(string[] args)
+    {
+        var o = Options.Parse(args, ["--root"]);
+        var ws = o.Workspace();
+        var report = SourceReport.Load(ws) ?? throw new ToolException(File.Exists(SourceReport.PathOf(ws))
+            ? $"출처 보고({SourceReport.PathOf(ws)})를 읽지 못했습니다. prepare 를 다시 실행하면 새로 만듭니다."
+            : "출처 보고가 없습니다. 먼저 prepare 를 실행하세요.");
+        Console.Write(report.ToText());
+        return ExitCodes.Ok;
+    }
+
     // 패치본 배포 묶음 (zip + 릴리스 설명). 올리는 건 출력한 gh 명령으로 직접.
     public static int Hotfix(string[] args)
     {
@@ -117,17 +129,35 @@ internal static class Commands
         if (!o.Flag("--save")) return ExitCodes.Ok;
 
         var ws = o.Workspace();
-        var known = found.Where(c => c.Region != null).GroupBy(c => c.Region!.Name).ToList();
+        // 한국·글로벌만 저장한다 (중국·대만판은 찾아도 이미 적어 둔 것만 — ClientLocator.SelectedByDefault)
+        var configured = Config.RawClients(ws.Root).Select(x => x.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in found.Where(c => c.Region != null && !ClientLocator.SelectedByDefault(c.Region) && !configured.Contains(c.Region.Name)))
+            Log.Note($"[detect] {c.Region!.Name} 은(는) 찾았지만 저장하지 않음 (쓰려면 config.json 에 적거나 화면에서 체크): {c.InstallDir}");
+        var known = found.Where(c => ClientLocator.SelectedByDefault(c.Region) || c.Region != null && configured.Contains(c.Region.Name))
+            .GroupBy(c => c.Region!.Name).ToList();
         foreach (var g in known.Where(g => g.Count() > 1))
             Log.Warn($"[detect] {g.Key} 가 여러 개 - 첫 번째를 씀: {g.First().InstallDir}");
-        if (known.Count == 0) throw new ToolException("지역을 알아낸 클라이언트가 없어 저장하지 않았습니다.");
+        // 예전 판별로 다른 지역 이름에 적힌 경로 (중국판이 global 로 — 런처가 같은 ffxivboot.exe 라 예전에는 글로벌로 보였다)
+        var mislabeled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (region, dir) in Config.RawClients(ws.Root))
+        {
+            string install = File.Exists(dir) ? Path.GetDirectoryName(Path.GetDirectoryName(dir)!)! :
+                Path.GetFileName(dir.TrimEnd('\\', '/')).Equals("game", StringComparison.OrdinalIgnoreCase) ? Path.GetDirectoryName(dir.TrimEnd('\\', '/'))! : dir;
+            if (Region.Find(region) is { } written && ClientLocator.InferRegion(install) is { } actual && ClientLocator.Contradicts(actual, written))
+            {
+                Log.Warn($"[detect] config.json 의 {region} 경로는 {actual.Name} 클라이언트로 보입니다 - 확인하세요: {dir}");
+                mislabeled.Add(region);
+            }
+        }
+        if (known.Count == 0)
+            throw new ToolException("저장할 한국·글로벌 클라이언트를 찾지 못했습니다 (중국·대만판은 config.json 에 직접 적거나 화면에서 체크).");
         using var _ = ws.Lock();
         var clients = known.ToDictionary(g => g.Key, g => g.First().InstallDir, StringComparer.OrdinalIgnoreCase);
-        // 찾지 못한 지역(지역을 알 수 없는 중국·대만판을 손으로 적어 둔 것 등)은 그대로 둔다
+        // 찾지 못한 지역(지역을 알 수 없는 대만판을 손으로 적어 둔 것 등)은 그대로 둔다
         foreach (var (region, dir) in Config.RawClients(ws.Root).Where(x => !clients.ContainsKey(x.Key)))
         {
             clients[region] = dir;
-            Log.Note($"[detect] {region} 은(는) 찾지 못해 적어 둔 경로를 그대로 둠: {dir}");
+            if (!mislabeled.Contains(region)) Log.Note($"[detect] {region} 은(는) 이번에 저장하지 않아 적어 둔 경로를 그대로 둠: {dir}");
         }
         Config.SetClients(ws.Root, clients);
         Log.Done($"[detect] {Config.FileName} 의 clients 저장: {string.Join(", ", clients.Keys)}");
@@ -138,11 +168,14 @@ internal static class Commands
     {
         var o = Options.Parse(args, ["--root", "--plugin", "--sources", "--ida-target"],
             ["--no-plugin", "--no-csv", "--no-opcodes", "--no-snapshot", "--no-sigcheck", "--no-repair", "--ida",
-             "--overwrite"]);
+             "--overwrite", "--server-exe", "--all-regions", "--cross-check"]);
         var ws = o.Workspace();
         using var _ = ws.Lock();
         var r = global::Prepare.Run(ws, new PrepareOptions
         {
+            ServerExe = o.Flag("--server-exe"),
+            ServerAllRegions = o.Flag("--all-regions"),
+            CrossCheck = o.Flag("--cross-check"),
             Plugin = o.Get("--plugin"),
             UpdatePlugin = !o.Flag("--no-plugin"),
             Snapshot = !o.Flag("--no-snapshot"),

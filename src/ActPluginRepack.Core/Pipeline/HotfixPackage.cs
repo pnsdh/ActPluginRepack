@@ -43,14 +43,23 @@ internal static class HotfixPackage
         var warnings = new List<string>();
         if (prepared.PatchNeeded == false) warnings.Add("prepare 의 판단으로는 공식 플러그인이 이미 맞습니다. 올릴 필요가 없을 수 있습니다.");
         if (prepared.PatchNeeded == null) warnings.Add("prepare 에서 패치가 필요한지 판단하지 못했습니다. 확인한 뒤 올리세요.");
+        // 배포 전 점검: 교차 확인을 하지 않았거나 다른 것이 있었으면 알린다 (만들기는 한다 — 사람이 보고 판단)
+        if (prepared.CrossCheck == null)
+            warnings.Add("교차 확인 없이 준비한 재료입니다. 올리기 전에 " +
+                         Errors.CliOr("교차 확인(prepare --cross-check)을 권합니다.", "고급 모드의 '가능한 모든 수단으로 교차 확인'을 권합니다."));
+        else
+        {
+            if (prepared.CrossCheck.Count > 0)
+                warnings.Add($"교차 확인에서 출처·수단끼리 다른 것이 있었습니다: {string.Join(", ", prepared.CrossCheck)}. {SourcesHint}");
+            if (prepared.CrossCheckGaps is { Count: > 0 } gaps)
+                warnings.Add($"교차 확인에서 대조하지 못한 것이 있습니다: {string.Join(", ", gaps)}. {SourcesHint}");
+        }
         if (config.Clients.Where(prepared.IsOutdated).Select(c => c.Name).ToList() is { Count: > 0 } skipped)
             warnings.Add($"{string.Join(", ", skipped)}: 게임이 최신 버전이 아니라 prepare 에서 빠졌습니다. 그 지역은 시그니처를 확인하지 못했습니다.");
 
         tag ??= PatchTag(prepared.GameVersions)
                 ?? throw new ToolException("게임 버전에 맞는 패치 번호를 알 수 없습니다 (대응표가 아직 갱신되지 않음). 태그를 직접 지정하세요 (예: --tag 7.58).");
-        // 점만 있거나 점으로 끝나면 폴더 이름이 바뀐다 (".." 은 작업 폴더 밖, "7.58." 은 "7.58")
-        if (tag.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || tag.Contains(' ') || tag.Length == 0 || tag.EndsWith('.'))
-            throw new ToolException($"태그에 쓸 수 없는 글자가 있습니다: '{tag}'");
+        if (TagProblem(tag) is { } problem) throw new ToolException(problem);
 
         // 담을 파일
         var entries = new List<(string Source, string Name)> { (plugin, PluginRelease.PluginFile) };
@@ -76,6 +85,14 @@ internal static class HotfixPackage
         return new HotfixResult(tag, zip, notes, entries.Select(e => e.Name).ToList(), warnings);
     }
 
+    private static string SourcesHint => Errors.CliOr("출처 보고(sources)를 확인한 뒤 올리세요.", "[출처] 화면을 확인한 뒤 올리세요.");
+
+    // 패치 번호(태그)로 쓸 수 없으면 그 까닭 (폴더·릴리스 이름이 된다 — 점만 있거나 점으로 끝나면 폴더 이름이 바뀐다:
+    // ".." 은 작업 폴더 밖, "7.58." 은 "7.58"). 화면이 실행 전에 같은 규칙으로 확인한다
+    public static string? TagProblem(string tag) =>
+        tag.Length == 0 || tag.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || tag.Contains(' ') || tag.EndsWith('.')
+            ? $"패치 번호(태그)로 쓸 수 없습니다: '{tag}' (예: 7.58)" : null;
+
     // 클라이언트 버전 -> 패치 번호 (글로벌 먼저, 한국 전용 중간 패치처럼 대응표에 없는 버전은 건너뜀)
     public static string? PatchTag(IReadOnlyDictionary<string, string> gameVersions) =>
         gameVersions.OrderBy(kv => kv.Key == Region.Global.Name ? 0 : 1)
@@ -92,7 +109,8 @@ internal static class HotfixPackage
         sb.AppendLine("공식 FFXIV_ACT_Plugin 업데이트 전까지 쓰는 비공식 임시본입니다. FFLogs 업로드는 되지만 랭킹에는 반영되지 않습니다.");
         sb.AppendLine($"설치 방법: [README](https://github.com/{Repo}#설치)").AppendLine();
         sb.AppendLine("| | |").AppendLine("|---|---|");
-        sb.AppendLine($"| 게임 버전 | {string.Join(" / ", prepared.GameVersions.GroupBy(kv => kv.Value).Select(g => $"{string.Join("·", g.Select(kv => Label(kv.Key)))} `{g.Key}`"))} |");
+        sb.AppendLine($"| 게임 버전 | {string.Join(" / ", prepared.GameVersions.GroupBy(kv => kv.Value).Select(g => $"{string.Join("·", g.Select(kv => Label(kv.Key)))} `{g.Key}`"))}" +
+                      (prepared.FromServer ? " (공식 패치 서버의 exe 로 확인)" : "") + " |");
         string plugin = built.PluginVersion is { } pv
             ? $"[`{pv}`](https://github.com/ravahn/FFXIV_ACT_Plugin/releases/tag/{Uri.EscapeDataString(pv)})" : "`?`";
         sb.AppendLine($"| 공식 플러그인 | [FFXIV_ACT_Plugin](https://github.com/ravahn/FFXIV_ACT_Plugin) {plugin}" +
@@ -131,6 +149,17 @@ internal static class HotfixPackage
                     : $"- 이름 override: `{Path.GetFileName(f)}` {n}개");
             }
         sb.AppendLine();
+        // 교차 확인을 했고 다른 것도, 대조하지 못한 것도 없을 때만
+        if (prepared.CrossCheck is { Count: 0 } && prepared.CrossCheckGaps is not { Count: > 0 })
+        {
+            sb.AppendLine("### 확인").AppendLine();
+            sb.AppendLine(prepared.FromServer
+                ? "- opcode·시그니처를 쓸 수 있었던 출처·수단(공개 자료, opcodediff 직접 실행, IDA, SigRegen 등)으로 대조해 다른 것 없음 " +
+                  "(게임 데이터는 공식 플러그인 것 그대로)"
+                : "- opcode·시그니처·게임 데이터(설치된 클라이언트)를 쓸 수 있었던 출처·수단(공개 자료, opcodediff 직접 실행, IDA, SigRegen, " +
+                  "게임 데이터 추출기 등)으로 대조해 다른 것 없음");
+            sb.AppendLine();
+        }
         sb.AppendLine("### 알려진 문제").AppendLine().AppendLine("- 없음");
         return sb.ToString();
     }

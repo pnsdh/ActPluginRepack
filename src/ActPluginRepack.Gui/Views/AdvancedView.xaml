@@ -45,6 +45,10 @@
                                ToolTip="체크한 작업을 prepare → rsv → build → install → hotfix 순서로 실행합니다. hotfix 는 설치를 막지 않도록 맨 뒤에 하고, 실패해도 결과에만 알립니다. 작업을 하나도 고르지 않으면 누를 수 없습니다." />
                 </StackPanel>
             </Grid>
+            <!-- 저장된 선택 중 기본과 다른 것 (다음 패치 날까지 남아 결과를 조용히 바꾸지 않게 보인다. 없으면 숨김) -->
+            <TextBlock Text="{Binding NonDefaultText, Converter={StaticResource KeepAll}}" Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,0"
+                       Visibility="{Binding NonDefaultText, Converter={StaticResource Visible}}"
+                       ToolTip="고른 작업과 옵션은 저장돼 다음에 열어도 그대로입니다. 기본으로 돌리려면 [선택 초기화]를 누르세요." />
             <!-- 설치·되돌리기 전에 ACT·게임이 켜져 있으면 넘어가지 않고 여기에 알린다 (없으면 숨김) -->
             <TextBlock Text="{Binding Notice, Converter={StaticResource KeepAll}}" Style="{StaticResource Body}" Margin="0,6,0,0"
                        Foreground="{DynamicResource SystemFillColorCautionBrush}"
@@ -70,7 +74,7 @@
                         <CheckBox Content="깨진 시그니처 자동 복구" IsChecked="{Binding Repair}" Margin="22,1,0,1" IsEnabled="{Binding Sigcheck}"
                                   ToolTip="깨진 시그니처를 upstream deucalion → SigRegen(옛 exe 와 비교해 재생성) 순서로 고쳐 input\signatures 에 기록하고 다시 점검합니다. 후보는 설정된 모든 클라이언트에서 검증을 통과해야 채택합니다. 어느 쪽을 쓸지는 아래 데이터 소스의 '시그니처'에서 고릅니다." />
                         <CheckBox Content="opcode 수집 (+ extras)" IsChecked="{Binding Opcodes}"
-                                  ToolTip="Yarukon 공개본 → karashiiro(버전 확인 시) → 로컬 opcodediff(지금 exe 와 직전 출시 exe 비교) → opcodediff 공개 diff → IDA 순서로 지역별 opcode 를 구해 input\opcodes 와 extras\(Lemegeton, OverlayPlugin)에 기록합니다. 출처끼리 대조해 값이 다르면 경고합니다." />
+                                  ToolTip="Yarukon 공개본 → karashiiro(버전 확인 시) → 로컬 opcodediff(지금 exe 와 직전 출시 exe 비교) → opcodediff 공개 diff → IDA 순서로 지역별 opcode 를 구해 input\opcodes 와 extras\(Lemegeton, OverlayPlugin, Machina)에 기록합니다. 출처끼리 대조해 값이 다르면 경고합니다." />
                         <CheckBox Content="IDA 결과 우선 (공개본이 있어도 실행)" IsChecked="{Binding ForceIda}" Margin="22,1,0,1" IsEnabled="{Binding HasIda}"
                                   ToolTip="공개본이 있어도 IDA 로 exe 를 분석해 직접 추출하고 그 결과를 우선합니다(약 5분). IDA 9 이상이 필요합니다. 설치 폴더는 Program Files 에서 자동으로 찾으며, 다른 곳이면 설정에서 지정합니다." />
                         <StackPanel Orientation="Horizontal" Margin="44,2,0,4" IsEnabled="{Binding HasIda}"
@@ -89,10 +93,17 @@
                             <ui:Button Grid.Column="1" Content="설정 열기" Appearance="Transparent" Margin="8,0,0,0" Padding="8,2"
                                        Command="{Binding OpenSettingsCommand}" />
                         </Grid>
-                        <CheckBox Content="게임 데이터 CSV 수집" IsChecked="{Binding Csv}"
-                                  ToolTip="스킬·상태·지역 이름 CSV 를 설치된 클라이언트에서 추출(oxidizer / SharpVision)하거나 공개 저장소에서 받아 input\csv 에 둡니다. 이름 표시용이므로 실패해도 빌드는 됩니다." />
+                        <CheckBox Content="게임 데이터 CSV 수집" IsChecked="{Binding Csv}" IsEnabled="{Binding CsvEnabled}" ToolTipService.ShowOnDisabled="True"
+                                  ToolTip="스킬·상태·지역 이름 CSV 를 설치된 클라이언트에서 추출(oxidizer / SharpVision)하거나 공개 저장소에서 받아 input\csv 에 둡니다. 이름 표시용이므로 실패해도 빌드는 됩니다. 공식 패치 서버 exe 로 준비할 때는 수집하지 않습니다." />
                         <CheckBox Content="캐시 무시하고 다시 추출" IsChecked="{Binding Overwrite}"
                                   ToolTip="SharpVision / oxidizer / IDA / 로컬 opcodediff 의 이전 결과를 쓰지 않고 다시 추출합니다." />
+                        <TextBlock Text="확인 방법" Style="{StaticResource Caption}" FontSize="13" FontWeight="SemiBold" Margin="0,10,0,2" />
+                        <CheckBox Content="내 게임 대신 공식 패치 서버의 최신 exe 로 준비" IsChecked="{Binding ServerExe}"
+                                  ToolTip="설치된 게임 대신 그 지역의 공식 패치 서버(Thaliak)에 올라온 최신 게임 exe 를 받아(지역마다 수십 MB) 시그니처 점검·복구와 로컬 opcodediff 를 합니다. 내 게임 버전은 보지 않습니다.&#10;&#10;· 게임을 업데이트하기 전에 미리 준비하거나, 한쪽 서버만 먼저 패치됐을 때 씁니다.&#10;· opcode 는 지역마다 그 지역의 최신 버전 것을 넣습니다.&#10;· 게임 데이터는 받을 수 없어 CSV 는 수집하지 않고, 빌드는 플러그인에 들어 있는 이름을 씁니다.&#10;· 대만판은 공식 패치 서버에서 받을 수 없어 설치된 클라이언트를 그대로 씁니다." />
+                        <CheckBox Content="설치하지 않은 지역의 exe 도 받아 점검" IsChecked="{Binding ServerAllRegions}" Margin="22,1,0,1" IsEnabled="{Binding ServerExe}"
+                                  ToolTip="글로벌·한국·중국판 가운데 설치하지 않은 지역의 최신 exe 도 공식 패치 서버에서 받아, 고친 시그니처가 그 지역에서도 맞는지 확인합니다. 하지 않는 서버까지 확인한 배포용 패치본을 만들 때 켭니다.&#10;&#10;· 이 플러그인은 메모리 시그니처와 패킷 후크를 글로벌·한국·중국판이 같이 쓰므로, 모든 exe 에서 맞는 것만 씁니다.&#10;· 중국판도 들어갑니다. 해루봇의 중국 서버용 폴더는 이 플러그인이 아니라 따로 고친 플러그인(TundraWork)을 쓰므로 보통은 필요 없고, 중국판이 한국보다 옛 버전인 시기에는 모두에 맞는 시그니처를 찾지 못해 복구가 실패할 수 있습니다.&#10;· 끄고 있어도 설치하지 않은 지역의 opcode 는 같은 버전의 공개 자료로 넣습니다.&#10;· 대만판은 공식 패치 서버에서 받을 수 없습니다." />
+                        <CheckBox Content="가능한 모든 수단으로 교차 확인 (배포 전 점검)" IsChecked="{Binding CrossCheck}"
+                                  ToolTip="고친 플러그인을 배포하기 전에, 쓸 수 있는 모든 수단을 돌려 서로 맞는지 확인합니다. 고르는 값과 판단은 그대로이고, 다른 것이 있으면 경고와 [출처] 화면의 '교차 확인'에 남깁니다.&#10;&#10;· opcode: 공개본이 있어도 IDA(약 5분)와 로컬 opcodediff 까지 모든 출처를 돌려 항목마다 견줍니다. 출처마다의 값은 작업 폴더의 extras\crosscheck 에 남습니다.&#10;· 시그니처: 쓰일 시그니처마다 공식 패턴, upstream deucalion, 직전 버전 exe 와 비교해 다시 만든 것(SigRegen), ClientStructs 이름(메모리)으로 같은 곳을 가리키는지 대조합니다. 직전 버전 exe 를 받을 수 있습니다.&#10;· 게임 데이터: SharpVision, xiv-data-oxidizer(설정에 없어도 받아서 빌드 — git·Rust 필요), 공개 저장소로 모두 구해 플러그인에 들어갈 이름 목록으로 견줍니다.&#10;· 아래 데이터 소스에서 끈 출처(시그니처의 upstream·SigRegen 포함)는 교차 확인에서도 빠집니다.&#10;· 고친 플러그인 배포 묶음(hotfix)은 교차 확인을 했는지, 다른 것이 있었는지를 경고와 릴리스 설명에 남깁니다.&#10;· 다른 것이 나오면 [출처] 화면에서 복사해 검토하세요. 출처 하나가 틀리는 경우가 있습니다." />
                     </StackPanel>
                 </ui:Card>
 
@@ -103,12 +114,19 @@
                             <CheckBox Content="ACT 로그에서 RSV 가져오기 (rsv)" IsChecked="{Binding DoRsv}"
                                       ToolTip="새 레이드의 스킬 이름처럼 서버가 가려서 보내는 이름(RSV)을 ACT 로그에서 모아 input\overrides\global_rsv.txt 에 넣습니다. OverlayPlugin 이 켜진 채로 그 콘텐츠에 들어가면 로그에 262 줄로 남습니다.&#10;&#10;· 읽는 곳: FFXIV 플러그인 설정의 로그 폴더(없으면 ACT 설정)에서 최근 30일 로그&#10;· 공식 플러그인에 같은 값으로 이미 있는 이름은 넣지 않습니다. 플러그인은 한 파일 안에 같은 이름이 두 번 있으면 그 파일과 뒤의 이름 파일을 모두 무시하므로, 이 파일에는 한 번씩만 씁니다.&#10;· 공식 플러그인이나 직접 넣은 파일과 값이 다른 것은 넣지 않고 알립니다.&#10;· 공식 플러그인에 나중에 들어간 이름은 다음에 가져올 때 이 파일에서 정리합니다." />
                             <CheckBox Content="패치 플러그인 빌드 (build)" IsChecked="{Binding DoBuild}"
-                                      ToolTip="input\ 의 데이터(opcode, 시그니처, 이름 목록, 오버라이드)를 넣은 플러그인을 output\ 에 만듭니다. prepare 이후 게임이 다시 패치됐으면 알려 줍니다." />
-                            <CheckBox Content="CSV 다시 변환" IsChecked="{Binding BuildCsv}" Margin="22,1,0,1" IsEnabled="{Binding DoBuild}"
-                                      ToolTip="input\csv 를 data\ 의 이름 목록으로 다시 변환합니다. 끄면 마지막 변환 결과를 그대로 씁니다." />
+                                      ToolTip="input\ 의 데이터(opcode, 시그니처, 이름 목록, 오버라이드)를 넣은 플러그인을 output\ 에 만듭니다. prepare 이후 게임이 다시 패치됐으면 알려 줍니다. 마지막 prepare 를 공식 패치 서버 exe 로 했으면 이름 목록은 넣지 않습니다." />
+                            <CheckBox Content="CSV 다시 변환" IsChecked="{Binding BuildCsv}" Margin="22,1,0,1" IsEnabled="{Binding BuildCsvEnabled}"
+                                      ToolTip="input\csv 를 data\ 의 이름 목록으로 다시 변환합니다. 끄면 마지막 변환 결과를 그대로 씁니다. 공식 패치 서버 exe 로 준비하면 이름 데이터를 넣지 않으므로 쓰지 않습니다." />
                             <CheckBox Content="고친 플러그인 배포 묶음 만들기 (hotfix)" IsChecked="{Binding DoHotfix}"
                                       Visibility="{Binding ShowHotfix, Converter={StaticResource Visible}}"
                                       ToolTip="빌드 결과를 FFXIV_ACT_Plugin_HotFix 릴리스용 zip 과 릴리스 설명(release-notes.md)으로 작업 폴더의 hotfix\&lt;패치&gt;\ 에 만듭니다. 게임·플러그인 버전, opcode 출처, 교체한 시그니처를 기록에서 채우고 출처마다 링크를 겁니다. 올리는 gh 명령은 진행 화면의 [자세한 기록]에 남깁니다. prepare 이후 게임이 다시 패치됐으면 만들지 않습니다." />
+                            <StackPanel Orientation="Horizontal" Margin="22,2,0,4" IsEnabled="{Binding DoHotfix}" ToolTipService.ShowOnDisabled="True"
+                                        Visibility="{Binding ShowHotfix, Converter={StaticResource Visible}}"
+                                        ToolTip="배포 묶음과 릴리스 이름에 쓰는 패치 번호입니다. 비우면 게임 버전에서 찾습니다. 패치 당일에는 대응표가 아직 갱신되지 않아 찾지 못할 수 있으니 그때 적으세요.">
+                                <TextBlock Text="패치 번호" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <ui:TextBox Text="{Binding HotfixTag, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="비우면 자동 (예: 7.58)" MinWidth="180"
+                                            AutomationProperties.Name="hotfix 패치 번호" />
+                            </StackPanel>
                             <CheckBox Content="ACT 에 설치 (install)" IsChecked="{Binding DoInstall}"
                                       ToolTip="output\ 의 플러그인을 ACT 의 FFXIV 플러그인 폴더에, extras 의 OverlayPlugin opcode 를 OverlayPlugin 에 넣습니다. 원래 파일은 backups\ 에 남습니다. ACT 와 게임을 종료해야 하며, 필요하면 관리자 권한 확인 창이 뜹니다." />
                             <CheckBox Content="OverlayPlugin opcode 도 넣기" IsChecked="{Binding InstallOverlay}" Margin="22,1,0,1" IsEnabled="{Binding InstallOverlayEnabled}"
@@ -166,6 +184,9 @@
                 <TextBlock Grid.Column="1" Text="{Binding GitHubText}" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="16,0,8,0"
                            HorizontalAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding GitHubTip}" />
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <ui:Button Content="{x:Static gui:Titles.Sources}" Icon="{ui:SymbolIcon DocumentSearch24}" Appearance="Transparent"
+                               ToolTip="마지막 prepare 가 무엇을 어디서 가져왔는지 봅니다: 게임 exe, 지역별 opcode 와 다른 출처와의 대조, 교체 시그니처, 게임 데이터."
+                               Command="{Binding OpenSourcesCommand}" />
                     <ui:Button Icon="{ui:SymbolIcon Key24}" Appearance="Transparent" ToolTip="GitHub 토큰 설정을 엽니다."
                                AutomationProperties.Name="GitHub 토큰 설정" Command="{Binding OpenSettingsCommand}" />
                     <ui:Button Icon="{ui:SymbolIcon FolderOpen24}" Appearance="Transparent" ToolTip="작업 폴더를 엽니다."
