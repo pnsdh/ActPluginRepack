@@ -38,6 +38,8 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     private readonly List<(string Version, OpcodeSet Set)> _derivedSets = []; // 직접 추출(localdiff/IDA) 결과와 그 게임 버전
     private readonly Dictionary<string, OpcodeSet> _ida = new(StringComparer.OrdinalIgnoreCase); // IDA 작업 폴더 -> 결과
     private Mono.Cecil.ModuleDefinition? _plugin;
+    private bool _overlayTemplateTried;
+    private string? _overlayTemplate; // OverlayPlugin 저장소의 opcodes.jsonc (틀, diff 로 채울 옛 목록)
 
     // 쓴 결과
     private readonly List<ResolvedOpcodes> _resolved = [];
@@ -51,6 +53,9 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
 
     // 공개 자료 없이 직접 구한 값(로컬 opcodediff / IDA)으로만 정한 지역 — 큰 패치에서는 틀릴 수 있어 공개되면 다시 확인할 것
     public IReadOnlyCollection<Region> Unconfirmed => _unconfirmed;
+
+    // OverlayPlugin opcodes.jsonc 에서 값을 구하지 못해 뺀 항목 ("지역 이름", Finish 뒤에)
+    public List<string> OverlayDropped { get; private set; } = [];
 
     // 베이스 플러그인을 읽은 Cecil 모듈은 파일을 연 채로 둔다 — 취소·실패해도 닫히게 (Prepare 가 using)
     public void Dispose() => _plugin?.Dispose();
@@ -271,7 +276,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             Log.Info($@"[machina] {ws.MachinaOpcodesDir} ({string.Join(", ", machina)})");
             written.Add($@"Machina\ ({string.Join(", ", machina)})");
         }
-        string? template = Try("OverlayPlugin 템플릿", () => Http.GetStringOrNull(OverlayPluginOutput.UpstreamUrl));
+        string? template = OverlayTemplate();
         if (template == null)
         {
             Log.Warn("[overlayplugin] OverlayPlugin 저장소의 opcodes.jsonc 를 받지 못해 생략");
@@ -279,7 +284,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
         }
         else if (Try<object>("OverlayPlugin 출력", () =>
                  {
-                     OverlayPluginOutput.Write(ws.OverlayOpcodesPath, template, _resolved);
+                     OverlayDropped = OverlayPluginOutput.Write(ws.OverlayOpcodesPath, template, _resolved);
                      return written; // 성공 표시
                  }) != null)
             written.Add(@"OverlayPlugin\opcodes.jsonc");
@@ -499,22 +504,54 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
                          $"새 값 {judged.NewHits}/{judged.Total})" + (i + 1 < olds.Count ? " - 한 출시 더 앞과 맞대 봄" : " - 이 결과는 쓰지 않음"));
                 continue;
             }
-            return WithYarukonExtras(judged.Server!, map, prev, source, version);
+            return WithPreviousExtras(judged.Server!, map, prev, source, version);
         }
         return null;
     }
 
-    private OpcodeSet WithYarukonExtras(Dictionary<string, int> server, Dictionary<int, int> map, string prev, string source, string version)
+    private OpcodeSet WithPreviousExtras(Dictionary<string, int> server, Dictionary<int, int> map, string prev, string source, string version)
     {
-        // 베이스 플러그인에 없는 이름(부가 출력용)은 맞댄 옛 출시의 Yarukon 목록이 대응표의 옛 값과 맞을 때 거기서 바꿔 채운다
-        if (Use("yarukon") && Try($"Yarukon {prev}", () => Yarukon(prev)) is { } prevList)
-        {
-            var used = prevList.Server.Where(kv => OpcodeNames.Used.Contains(kv.Key)).ToList();
-            if (used.Count > 0 && used.Count(kv => map.ContainsKey(kv.Value)) >= used.Count * 0.9)
-                foreach (var (name, old) in used)
-                    if (!server.ContainsKey(name) && map.TryGetValue(old, out int now)) server[name] = now;
-        }
+        FillFromPrevious(server, map, prev, source);
         return new OpcodeSet(source, server, GameVersions.RetailOf(version));
+    }
+
+    // 대응표(옛 값 -> 새 값)로 바꾼 결과에 없는 이름(부가 출력용 — 베이스 플러그인에 없는 MapEffect 등)을, 맞댄 옛 출시(prev)의 다른
+    // 목록을 같은 대응표로 바꿔 채운다: 그 출시의 Yarukon 목록, OverlayPlugin 원본 파일의 그 게임 버전 항목(패치 당일에는 보통 직전
+    // 출시 값 — 통합 지역은 같은 버전이면 opcode 가 같아 어느 지역 항목이든). 그 목록이 대응표의 옛 값과 거의 다(90%) 맞을 때만.
+    private void FillFromPrevious(Dictionary<string, int> server, Dictionary<int, int> map, string prev, string source)
+    {
+        var lists = new List<(string What, Dictionary<string, int> Old)>();
+        if (Use("yarukon") && Try($"Yarukon {prev}", () => Yarukon(prev)) is { } prevList) lists.Add(($"Yarukon {prev}", prevList.Server));
+        if (OverlayTemplate() is { } template)
+            foreach (var e in OverlayPluginOutput.Entries(template).Where(e => e.Version == prev))
+                if (Region.All.Any(r => r.CnOpcodes && r.Opcodes == e.Region)) lists.Add(($"OverlayPlugin {e.Region} {prev}", e.Server));
+        var filled = new List<string>();
+        foreach (var (what, old) in lists)
+        {
+            var used = old.Where(kv => OpcodeNames.Used.Contains(kv.Key)).ToList();
+            if (used.Count == 0 || used.Count(kv => map.ContainsKey(kv.Value)) < used.Count * 0.9)
+            {
+                Log.Note($"[opcode] {source}: {what} 가 맞댄 옛 출시 값이 아닌 듯 - 채우는 데 쓰지 않음");
+                continue;
+            }
+            foreach (var (name, old2) in used)
+                if (!server.ContainsKey(name) && map.TryGetValue(old2, out int now))
+                {
+                    server[name] = now;
+                    filled.Add($"{name}({what})");
+                }
+        }
+        if (filled.Count > 0) Log.Note($"[opcode] {source}: 대응표로 바꿔 채움 - {string.Join(", ", filled)}");
+    }
+
+    // OverlayPlugin 저장소의 opcodes.jsonc (한 번만 받는다). 받지 못하면 null — 출처 실패로 세지 않는다 (opcode 는 그대로 고친다)
+    private string? OverlayTemplate()
+    {
+        if (_overlayTemplateTried) return _overlayTemplate;
+        _overlayTemplateTried = true;
+        try { _overlayTemplate = Http.GetStringOrNull(OverlayPluginOutput.UpstreamUrl); }
+        catch (Exception ex) when (Errors.Recoverable(ex)) { Log.Warn($"[overlayplugin] OverlayPlugin 원본 opcodes.jsonc 를 받지 못함 - {ex.Message}"); }
+        return _overlayTemplate;
     }
 
     internal enum LocalDiffVerdict { BaseIsPrevious, BaseIsCurrent, Unknown }
@@ -573,6 +610,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             }
             var server = old.Where(kv => map.ContainsKey(kv.Value))
                 .ToDictionary(kv => kv.Key, kv => map[kv.Value], StringComparer.Ordinal);
+            FillFromPrevious(server, map, prev.Version, source);
             return new OpcodeSet(source, server, retail);
         }
         return null;

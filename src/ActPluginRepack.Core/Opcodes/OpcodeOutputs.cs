@@ -40,16 +40,46 @@ internal static class LemegetonOutput
 //   { "<지역>": { "<게임 버전>": { "<이름>": { "opcode": n, "size": n }, ... } }, ... }
 // OverlayPlugin 저장소의 파일을 틀로 쓴다: 갱신하는 지역은 틀의 이름 순서·size 를 그대로 두고 opcode 만 바꿔 새로 쓰고,
 // 나머지 지역은 원문 텍스트(주석 포함)를 그대로 둔다. size 는 패치마다 거의 안 바뀌므로 틀 값을 쓴다.
+// 출처에 없는 이름은 틀의 같은 지역 항목이 같은 게임 버전이면(OverlayPlugin 이 이미 갱신함) 그 값으로, 아니면 뺀다 (옛 값은 틀림).
 internal static class OverlayPluginOutput
 {
     public const string UpstreamUrl =
         "https://raw.githubusercontent.com/OverlayPlugin/OverlayPlugin/main/OverlayPlugin.Core/resources/opcodes.jsonc";
 
-    public static void Write(string path, string template, IEnumerable<ResolvedOpcodes> resolved)
+    // 틀의 지역마다 (첫) 버전 항목: 지역 이름, 게임 버전, 표준 이름 -> opcode. 같은 버전일 때 빠진 이름을 채우고, 옛 버전이면
+    // diff 대응표로 바꿀 옛 목록이 된다 (패치 당일에는 보통 직전 출시 값). 형식이 이상하면 빈 목록 (Write 가 따로 알린다).
+    public static List<(string Region, string Version, Dictionary<string, int> Server)> Entries(string template)
     {
+        var result = new List<(string, string, Dictionary<string, int>)>();
+        var byOut = OpcodeNames.OverlayPlugin.ToDictionary(m => m.Out, m => m.Name, StringComparer.Ordinal);
+        try
+        {
+            using var doc = JsonDocument.Parse(template, JsonOptions.Comments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return result;
+            foreach (var region in doc.RootElement.EnumerateObject())
+            {
+                if (region.Value.ValueKind != JsonValueKind.Object) continue;
+                var first = region.Value.EnumerateObject().FirstOrDefault();
+                if (first.Value.ValueKind != JsonValueKind.Object) continue;
+                var server = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (var p in first.Value.EnumerateObject())
+                    if (p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("opcode", out var op) && op.TryGetInt32(out int v))
+                        server[byOut.GetValueOrDefault(p.Name, p.Name)] = v;
+                result.Add((region.Name, first.Name, server));
+            }
+        }
+        catch (JsonException) { }
+        return result;
+    }
+
+    // 돌려주는 것: 값을 구하지 못해 뺀 항목 ("지역 이름", 출처 보고용)
+    public static List<string> Write(string path, string template, IEnumerable<ResolvedOpcodes> resolved)
+    {
+        var dropped = new List<string>();
         var updates = resolved.Where(r => r.GameVersion != null)
             .ToDictionary(r => r.Region.Opcodes, StringComparer.Ordinal);
-        if (updates.Count == 0) return;
+        if (updates.Count == 0) return dropped;
+        var entries = Entries(template);
 
         string nl = template.Contains("\r\n") ? "\r\n" : "\n"; // 틀의 줄바꿈을 따른다
         int open = FirstBraceOutsideComment(template);
@@ -69,12 +99,15 @@ internal static class OverlayPluginOutput
             // 틀: 같은 지역의 (첫) 버전 항목, 없으면 Global
             var shape = Shape(doc.RootElement, region) ?? Shape(doc.RootElement, "Global")
                         ?? throw new ToolException("OverlayPlugin opcodes.jsonc 틀에 Global 항목이 없습니다.");
-            parts.Add(Block(r, shape, nl));
+            // 틀의 같은 지역 항목이 이번 게임 버전이면 빠진 이름을 그 값으로 (다른 지역 항목은 opcode 가 다를 수 있어 쓰지 않는다)
+            var same = entries.FirstOrDefault(e => e.Region == region && e.Version == r.GameVersion).Server;
+            parts.Add(Block(r, shape, same, nl, dropped));
         }
 
         string text = header + "{" + nl + string.Join("," + nl, parts) + nl + "}" + nl;
         Files.WriteAtomic(path, text);
         Log.Info($"[overlayplugin] {path} ({string.Join(", ", updates.Keys)} 갱신)");
+        return dropped;
     }
 
     private static List<(string Name, int Size)>? Shape(JsonElement root, string region)
@@ -87,7 +120,8 @@ internal static class OverlayPluginOutput
             .ToList();
     }
 
-    private static string Block(ResolvedOpcodes r, List<(string Name, int Size)> shape, string nl)
+    private static string Block(ResolvedOpcodes r, List<(string Name, int Size)> shape, Dictionary<string, int>? same, string nl,
+                                List<string> dropped)
     {
         var byOut = OpcodeNames.OverlayPlugin.ToDictionary(m => m.Out, m => m.Name, StringComparer.Ordinal);
         var sb = new StringBuilder();
@@ -96,14 +130,21 @@ internal static class OverlayPluginOutput
         sb.Append($"            // {label}(ActPluginRepack: {r.Set.Source}){nl}");
         var entries = new List<string>();
         var missing = new List<string>();
+        var kept = new List<string>();
         foreach (var (name, size) in shape)
         {
             string std = byOut.GetValueOrDefault(name, name);
-            if (!r.Set.Server.TryGetValue(std, out int op)) { missing.Add(name); continue; }
+            if (!r.Set.Server.TryGetValue(std, out int op))
+            {
+                if (same == null || !same.TryGetValue(std, out op)) { missing.Add(name); continue; }
+                kept.Add(name);
+            }
             entries.Add($"            \"{name}\": {{{nl}                \"opcode\": {op},{nl}                \"size\": {size}{nl}            }}");
         }
         sb.Append(string.Join("," + nl, entries)).Append($"{nl}        }}{nl}    }}");
+        if (kept.Count > 0) Log.Note($"[overlayplugin] {r.Region.Opcodes}: 출처에 없어 원본(같은 게임 버전)의 값을 씀 - {string.Join(", ", kept)}");
         if (missing.Count > 0) Log.Warn($"[overlayplugin] {r.Region.Opcodes}: 값이 없어 뺀 항목 - {string.Join(", ", missing)}");
+        dropped.AddRange(missing.Select(m => $"{r.Region.Opcodes} {m}"));
         return sb.ToString();
     }
 

@@ -85,6 +85,30 @@ public class OverlayPluginOutputTests
         Assert.False(entry.TryGetProperty("MapEffect", out _));
     }
 
+    // 출처에 없는 이름: 틀의 같은 지역 항목이 같은 게임 버전이면 그 값으로 채우고, 옛 버전이면 뺀다 (뺀 것은 돌려준다)
+    [Fact]
+    public void MissingNamesComeFromSameVersionTemplateOnly()
+    {
+        string same = Template.Replace("\"2026.09.15.0000.0000\": {\n            // Version", $"\"{Version}\": {{\n            // Version");
+        using var tmp = new TempDir();
+        string path = Path.Combine(tmp.Path, "opcodes.jsonc");
+        var dropped = OverlayPluginOutput.Write(path, same, [Resolved("global", new() { ["RSV"] = 0x2B0 }), Resolved("korean", new() { ["RSV"] = 0x2B0 })]);
+        using var doc = Parse(File.ReadAllText(path));
+        Assert.Equal(100, doc.RootElement.GetProperty("Global").GetProperty(Version).GetProperty("MapEffect").GetProperty("opcode").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("Korean").GetProperty(Version).TryGetProperty("MapEffect", out _)); // 틀의 한국 항목은 옛 버전
+        Assert.Equal(["Korean MapEffect"], dropped);
+    }
+
+    [Fact]
+    public void EntriesUseStandardNames()
+    {
+        var entries = OverlayPluginOutput.Entries(Template);
+        Assert.Equal(["Global", "Korean"], entries.Select(e => e.Region));
+        Assert.Equal("2026.09.15.0000.0000", entries[0].Version);
+        Assert.Equal(new Dictionary<string, int> { ["MapEffect"] = 100, ["RSV"] = 200 }, entries[0].Server); // RSVData -> RSV
+        Assert.Empty(OverlayPluginOutput.Entries("{ 깨짐"));
+    }
+
     [Fact]
     public void FollowsTemplateLineEnding()
     {
