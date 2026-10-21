@@ -59,7 +59,7 @@ public class OverlayPluginOutputTests
         string text = Write(Template, Resolved("korean", new() { ["MapEffect"] = 0x1A3 }));
         Assert.StartsWith("// 머리 주석 { 괄호 }\n{", text);
         Assert.Contains(Block(Template, "Global"), text);                  // 주석·따옴표·괄호가 든 원문 그대로
-        Assert.Contains("// Version: 7.57 (ActPluginRepack: test src)", text);
+        Assert.Contains("            // Version: 7.57\n            \"MapEffect\"", text); // 본가 형식 — 출처 표시 없이
 
         using var doc = Parse(text);
         var korean = doc.RootElement.GetProperty("Korean");
@@ -97,6 +97,18 @@ public class OverlayPluginOutputTests
         Assert.Equal(100, doc.RootElement.GetProperty("Global").GetProperty(Version).GetProperty("MapEffect").GetProperty("opcode").GetInt32());
         Assert.False(doc.RootElement.GetProperty("Korean").GetProperty(Version).TryGetProperty("MapEffect", out _)); // 틀의 한국 항목은 옛 버전
         Assert.Equal(["Korean MapEffect"], dropped);
+    }
+
+    // 원본이 이미 같은 게임 버전·같은 값이면 그 블록은 원문 그대로 (본가와 같은 줄이 되어 포크 동기화가 충돌하지 않게)
+    [Fact]
+    public void SameVersionAndValuesKeepsOriginalBlock()
+    {
+        string same = Template.Replace("2026.09.15.0000.0000", Version);
+        string text = Write(same, Resolved("global", new() { ["MapEffect"] = 100 }), Resolved("korean", new() { ["MapEffect"] = 102 }));
+        Assert.Contains(Block(same, "Global"), text);                       // 값이 같음 (RSV 는 출처에 없어 원본 값) — 주석·url 까지 그대로
+        Assert.DoesNotContain(Block(same, "Korean"), text);                 // 값이 다름 — 새로 씀
+        using var doc = Parse(text);
+        Assert.Equal(102, doc.RootElement.GetProperty("Korean").GetProperty(Version).GetProperty("MapEffect").GetProperty("opcode").GetInt32());
     }
 
     [Fact]

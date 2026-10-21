@@ -41,6 +41,9 @@ internal static class LemegetonOutput
 // OverlayPlugin 저장소의 파일을 틀로 쓴다: 갱신하는 지역은 틀의 이름 순서·size 를 그대로 두고 opcode 만 바꿔 새로 쓰고,
 // 나머지 지역은 원문 텍스트(주석 포함)를 그대로 둔다. size 는 패치마다 거의 안 바뀌므로 틀 값을 쓴다.
 // 출처에 없는 이름은 틀의 같은 지역 항목이 같은 게임 버전이면(OverlayPlugin 이 이미 갱신함) 그 값으로, 아니면 뺀다 (옛 값은 틀림).
+// 형식은 본가 그대로 — 포크에 먼저 넣은 뒤 본가가 같은 값을 올리면 git 이 충돌 없이 합치도록 (사용자 결정, 2026-10-21):
+//   - 새로 쓰는 블록의 주석은 본가처럼 "// Version: <패치 라벨>" 만 (출처는 로그에)
+//   - 틀의 같은 지역 항목이 같은 게임 버전이고 값도 모두 같으면 그 블록은 원문 그대로 (주석까지 바이트 단위로)
 internal static class OverlayPluginOutput
 {
     public const string UpstreamUrl =
@@ -101,13 +104,31 @@ internal static class OverlayPluginOutput
                         ?? throw new ToolException("OverlayPlugin opcodes.jsonc 틀에 Global 항목이 없습니다.");
             // 틀의 같은 지역 항목이 이번 게임 버전이면 빠진 이름을 그 값으로 (다른 지역 항목은 opcode 가 다를 수 있어 쓰지 않는다)
             var same = entries.FirstOrDefault(e => e.Region == region && e.Version == r.GameVersion).Server;
+            if (same != null && blocks.FirstOrDefault(b => b.Name == region).Text is { } original && SameValues(r, shape, same))
+            {
+                Log.Note($"[overlayplugin] {region}: 원본이 이미 같은 게임 버전·같은 값이라 그대로 ({r.Set.Source})");
+                parts.Add(original);
+                continue;
+            }
+            Log.Info($"[overlayplugin] {region} {r.GameVersion} <- {r.Set.Source}" + (r.Set.PatchLabel != null ? $" (Version: {r.Set.PatchLabel})" : ""));
             parts.Add(Block(r, shape, same, nl, dropped));
         }
 
         string text = header + "{" + nl + string.Join("," + nl, parts) + nl + "}" + nl;
         Files.WriteAtomic(path, text);
-        Log.Info($"[overlayplugin] {path} ({string.Join(", ", updates.Keys)} 갱신)");
+        Log.Info($"[overlayplugin] {path}");
         return dropped;
+    }
+
+    // 쓸 값(출처 값, 없으면 원본 값)이 틀의 이름마다 원본과 모두 같은지
+    private static bool SameValues(ResolvedOpcodes r, List<(string Name, int Size)> shape, Dictionary<string, int> same)
+    {
+        var byOut = OpcodeNames.OverlayPlugin.ToDictionary(m => m.Out, m => m.Name, StringComparer.Ordinal);
+        return shape.All(s =>
+        {
+            string std = byOut.GetValueOrDefault(s.Name, s.Name);
+            return same.TryGetValue(std, out int old) && (!r.Set.Server.TryGetValue(std, out int now) || now == old);
+        });
     }
 
     private static List<(string Name, int Size)>? Shape(JsonElement root, string region)
@@ -126,8 +147,8 @@ internal static class OverlayPluginOutput
         var byOut = OpcodeNames.OverlayPlugin.ToDictionary(m => m.Out, m => m.Name, StringComparer.Ordinal);
         var sb = new StringBuilder();
         sb.Append($"    \"{r.Region.Opcodes}\": {{{nl}        \"{r.GameVersion}\": {{{nl}");
-        string label = r.Set.PatchLabel != null ? $"Version: {r.Set.PatchLabel} " : "";
-        sb.Append($"            // {label}(ActPluginRepack: {r.Set.Source}){nl}");
+        // 본가 형식: "// Version: 7.57h" (라벨을 모르면 주석 줄 없이)
+        if (r.Set.PatchLabel != null) sb.Append($"            // Version: {r.Set.PatchLabel}{nl}");
         var entries = new List<string>();
         var missing = new List<string>();
         var kept = new List<string>();
