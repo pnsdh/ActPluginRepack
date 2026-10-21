@@ -4,15 +4,60 @@ using System.Text.Json;
 // 플러그인 밖에서 쓰는 opcode 파일들 (extras\ 에 출력).
 internal sealed record ResolvedOpcodes(Region Region, string? GameVersion, OpcodeSet Set);
 
-// Lemegeton blueprint — Yarukon ffxiv_opcode_finder / update_lemegeton.py 와 같은 형식.
+// Lemegeton blueprint — Lemegeton 본가 blueprint.xml 과 같은 형식 (Yarukon update_lemegeton.py 와도 같다).
+// 항목(이름·순서)은 본가 blueprint 를 틀로 따른다 — 본가가 항목을 늘려도 놓치지 않게 (BossStatusEffectList 가 그렇게 빠졌었다).
+// 틀을 받지 못하거나 읽지 못하면 OpcodeNames.Lemegeton 으로.
 internal static class LemegetonOutput
 {
-    // 쓸 지역(Lemegeton 대상, 게임 버전을 앎)이 없으면 쓰지 않고 false
-    public static bool Write(string path, IEnumerable<ResolvedOpcodes> resolved)
+    public const string UpstreamUrl = "https://raw.githubusercontent.com/paissaheavyindustries/Resources/main/Blueprint/blueprint.xml";
+
+    // 틀의 지역마다: Region Name, 게임 버전, 표준 이름 -> opcode (본가가 비워 둔 0 은 뺀다). diff 대응표로 바꿀 옛 목록으로도 쓴다.
+    // 읽지 못하면 빈 목록.
+    public static List<(string Region, string Version, Dictionary<string, int> Server)> Entries(string? template) =>
+        Parse(template).Select(r => (r.Region, r.Version, r.Opcodes.Where(o => o.Id != 0)
+            .GroupBy(o => StandardName(o.Name)).ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal))).ToList();
+
+    // 틀의 항목 이름 (출력 이름, 지역들에 나온 순서대로). 읽지 못하면 null
+    public static List<string>? Names(string? template)
+    {
+        var names = Parse(template).SelectMany(r => r.Opcodes.Select(o => o.Name)).Distinct(StringComparer.Ordinal).ToList();
+        return names.Count > 0 ? names : null;
+    }
+
+    private static string StandardName(string outName) =>
+        OpcodeNames.Lemegeton.FirstOrDefault(m => m.Out == outName).Name ?? outName;
+
+    private static List<(string Region, string Version, List<(string Name, int Id)> Opcodes)> Parse(string? template)
+    {
+        var result = new List<(string, string, List<(string, int)>)>();
+        if (string.IsNullOrWhiteSpace(template)) return result;
+        try
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(template.TrimStart('﻿'));
+            foreach (var region in doc.Descendants("Region"))
+            {
+                var ops = region.Descendants("Opcode")
+                    .Select(o => ((string?)o.Attribute("Name"), int.TryParse((string?)o.Attribute("Id"), out int id) ? id : -1))
+                    .Where(o => !string.IsNullOrEmpty(o.Item1) && o.Item2 >= 0).Select(o => (o.Item1!, o.Item2)).ToList();
+                if ((string?)region.Attribute("Name") is { } name && (string?)region.Attribute("Version") is { } version)
+                    result.Add((name, version, ops));
+            }
+        }
+        catch (System.Xml.XmlException) { }
+        return result;
+    }
+
+    // 쓸 지역(Lemegeton 대상, 게임 버전을 앎)이 없으면 쓰지 않고 null. 쓰면 값을 구하지 못해 뺀 항목 ("지역 이름", 출처 보고용)
+    public static List<string>? Write(string path, IEnumerable<ResolvedOpcodes> resolved, string? template = null)
     {
         var regions = resolved.Where(r => r.Region.Lemegeton != null && r.GameVersion != null)
             .OrderBy(r => Array.IndexOf(Region.All, r.Region)).ToList(); // Global, CN, KR
-        if (regions.Count == 0) return false;
+        if (regions.Count == 0) return null;
+        var names = Names(template);
+        if (names == null) Log.Note("[lemegeton] 본가 blueprint 를 쓰지 못해 이 도구의 항목 목록으로 씀");
+        var items = names?.Select(n => (Out: n, Name: StandardName(n))).ToList() ?? [.. OpcodeNames.Lemegeton];
+        var dropped = new List<string>();
+        var entries = Entries(template);
 
         var sb = new StringBuilder();
         sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Blueprint>\r\n\t<Regions>\r\n");
@@ -20,19 +65,23 @@ internal static class LemegetonOutput
         {
             sb.Append($"\t\t<Region Name=\"{r.Region.Lemegeton}\" Version=\"{r.GameVersion}\">\r\n\t\t\t<Opcodes>\r\n");
             var missing = new List<string>();
-            foreach (var (outName, name) in OpcodeNames.Lemegeton)
+            // 출처에 없는 이름은 틀의 같은 지역 항목이 같은 게임 버전이면 그 값으로 (본가가 비워 둔 0 은 Entries 가 뺐다)
+            var same = entries.FirstOrDefault(e => e.Region == r.Region.Lemegeton && e.Version == r.GameVersion).Server;
+            foreach (var (outName, name) in items)
             {
-                if (r.Set.Server.TryGetValue(name, out int op)) sb.Append($"\t\t\t\t<Opcode Name=\"{outName}\" Id=\"{op}\" />\r\n");
+                if (r.Set.Server.TryGetValue(name, out int op) || same != null && same.TryGetValue(name, out op))
+                    sb.Append($"\t\t\t\t<Opcode Name=\"{outName}\" Id=\"{op}\" />\r\n");
                 else missing.Add(outName);
             }
             sb.Append("\t\t\t</Opcodes>\r\n\t\t</Region>\r\n");
             if (missing.Count > 0) Log.Warn($"[lemegeton] {r.Region.Lemegeton}: 값이 없어 뺀 항목 - {string.Join(", ", missing)}");
+            dropped.AddRange(missing.Select(m => $"{r.Region.Lemegeton} {m}"));
         }
         sb.Append("\t</Regions>\r\n</Blueprint>\r\n");
 
         Files.WriteAtomic(path, sb.ToString());
         Log.Info($"[lemegeton] {path} ({string.Join(", ", regions.Select(r => r.Region.Lemegeton))})");
-        return true;
+        return dropped;
     }
 }
 

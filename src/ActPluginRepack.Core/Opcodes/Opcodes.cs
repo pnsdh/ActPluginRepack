@@ -35,10 +35,12 @@ internal static class OpcodeNames
         ("PresetWaymark", "PlaceFieldMarkerPreset"), ("Waymark", "PlaceFieldMarker"), ("SystemLogMessage", "SystemLogMessage"),
     ];
 
-    // Lemegeton blueprint — Yarukon finder 의 lemegeton.xml 과 같은 대응/순서
+    // Lemegeton blueprint — Lemegeton 본가(paissaheavyindustries/Resources Blueprint/blueprint.xml, NetworkDecoder 가 읽는 이름)와
+    // 같은 대응/순서. Yarukon finder 의 lemegeton.xml 에는 BossStatusEffectList 가 없다.
     public static readonly (string Out, string Name)[] Lemegeton =
     [
         ("StatusEffectList", "StatusEffectList"), ("StatusEffectList2", "StatusEffectList2"), ("StatusEffectList3", "StatusEffectList3"),
+        ("BossStatusEffectList", "BossStatusEffectList"),
         ("Ability1", "ActionEffect1"), ("Ability8", "ActionEffect8"), ("Ability16", "ActionEffect16"),
         ("Ability24", "ActionEffect24"), ("Ability32", "ActionEffect32"),
         ("ActorCast", "ActorCast"), ("EffectResult", "EffectResult"),

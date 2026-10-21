@@ -211,7 +211,52 @@ public class LemegetonOutputTests
     {
         using var tmp = new TempDir();
         string path = Path.Combine(tmp.Path, "lemegeton.xml");
-        LemegetonOutput.Write(path, [Resolved("traditional-chinese", "2026.10.01.0000.0000", new() { ["ActorCast"] = 1 })]);
+        Assert.Null(LemegetonOutput.Write(path, [Resolved("traditional-chinese", "2026.10.01.0000.0000", new() { ["ActorCast"] = 1 })]));
         Assert.False(File.Exists(path));
+    }
+
+    private const string Blueprint = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <Blueprint>
+            <Regions>
+                <Region Name="EN/DE/FR/JP" Version="2026.10.06.0000.0000">
+                    <Opcodes>
+                        <Opcode Name="Ability1" Id="583" />
+                        <Opcode Name="NewThing" Id="77" />
+                        <Opcode Name="MapEffect" Id="0" />
+                    </Opcodes>
+                </Region>
+            </Regions>
+        </Blueprint>
+        """;
+
+    // 항목(이름·순서)은 본가 blueprint 를 따른다: 이 도구가 모르는 새 이름도 표준 이름 그대로 찾고, 값이 없으면 빼고 돌려준다
+    [Fact]
+    public void FollowsUpstreamBlueprintNames()
+    {
+        using var tmp = new TempDir();
+        string path = Path.Combine(tmp.Path, "lemegeton.xml");
+        var dropped = LemegetonOutput.Write(path, [Resolved("global", "2026.10.16.0000.0000", new() { ["ActionEffect1"] = 0x2A0, ["NewThing"] = 5, ["ActorCast"] = 1 })],
+                                            Blueprint);
+        var names = XDocument.Load(path).Descendants("Opcode").Select(o => (string)o.Attribute("Name")!).ToList();
+        Assert.Equal(["Ability1", "NewThing"], names);   // 본가에 없는 ActorCast 는 쓰지 않는다
+        Assert.Equal(["EN/DE/FR/JP MapEffect"], dropped);
+
+        // 틀이 같은 게임 버전이면 출처에 없는 이름은 틀 값으로 (0 은 쓰지 않음). 앞에 BOM 이 붙은 틀도 읽는다
+        dropped = LemegetonOutput.Write(path, [Resolved("global", "2026.10.06.0000.0000", new() { ["ActionEffect1"] = 0x2A0 })], "﻿" + Blueprint);
+        var ids = XDocument.Load(path).Descendants("Opcode").ToDictionary(o => (string)o.Attribute("Name")!, o => (int)o.Attribute("Id")!);
+        Assert.Equal(new Dictionary<string, int> { ["Ability1"] = 0x2A0, ["NewThing"] = 77 }, ids);
+        Assert.Equal(["EN/DE/FR/JP MapEffect"], dropped);
+    }
+
+    // 옛 목록으로 쓸 때는 표준 이름으로, 본가가 비워 둔 0 은 뺀다. 읽지 못하면 비어 있고 Write 는 이 도구의 목록으로
+    [Fact]
+    public void BlueprintEntriesUseStandardNamesAndSkipZero()
+    {
+        var e = Assert.Single(LemegetonOutput.Entries(Blueprint));
+        Assert.Equal(("EN/DE/FR/JP", "2026.10.06.0000.0000"), (e.Region, e.Version));
+        Assert.Equal(new Dictionary<string, int> { ["ActionEffect1"] = 583, ["NewThing"] = 77 }, e.Server);
+        Assert.Empty(LemegetonOutput.Entries("<깨짐"));
+        Assert.Null(LemegetonOutput.Names(null));
     }
 }

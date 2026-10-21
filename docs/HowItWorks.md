@@ -221,7 +221,10 @@ exe 복사본을 `idat` 헤드리스(창 없이)로 분석한다. 결과 `opcode
 
 ACT 플러그인 폴더에 넣는 `output\` 과 따로, 다른 도구용 opcode 파일을 만든다:
 
-- `extras\lemegeton.xml` — Lemegeton blueprint (EN/DE/FR/JP, CN, KR). Yarukon finder 와 같은 형식.
+- `extras\lemegeton.xml` — Lemegeton blueprint (EN/DE/FR/JP, CN, KR). [Lemegeton 본가 blueprint](https://github.com/paissaheavyindustries/Resources/blob/main/Blueprint/blueprint.xml)
+  를 틀로 항목 이름·순서를 따른다(본가가 항목을 늘려도 놓치지 않게 — Yarukon finder 출력에는 `BossStatusEffectList` 가 없다). 받지 못하면 이 도구의
+  목록으로. 출처에 없는 이름은 틀이 같은 게임 버전이면 그 값(본가가 비워 둔 0 은 빼고)으로, 아니면 뺀다. diff 로 정한 지역은 틀의 직전
+  버전 항목도 대응표로 바꿀 옛 목록으로 쓴다(위 OverlayPlugin 과 같다). 뺀 항목은 출처 보고의 extras 줄에 적는다.
 - `extras\OverlayPlugin\opcodes.jsonc` — OverlayPlugin `resources\opcodes.jsonc` 교체용.
   [OverlayPlugin 저장소의 파일](https://github.com/OverlayPlugin/OverlayPlugin/blob/main/OverlayPlugin.Core/resources/opcodes.jsonc)을
   틀로 갱신한 지역의 opcode 만 바꾸고 `size` 와 나머지 지역은 그대로 둔다. 베이스 플러그인에 없는 이름(MapEffect 등)은 diff

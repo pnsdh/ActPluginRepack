@@ -520,8 +520,9 @@ internal static class Prepare
         {
             var (written, skipped) = opcodes.Finish(games.VersionOf, games.OutdatedRegions);
             // (OverlayPlugin 파일에서 값을 구하지 못해 뺀 항목은 출처 보고에 — 일반 사용자도 그 파일을 쓰므로)
-            extras.AddRange(written.Select(w => $@"extras\{w}" + (w == @"OverlayPlugin\opcodes.jsonc" && opcodes.OverlayDropped.Count > 0
-                ? $" - 값을 구하지 못해 뺀 항목: {string.Join(", ", opcodes.OverlayDropped)}" : "")));
+            extras.AddRange(written.Select(w => $@"extras\{w}" + ((w == @"OverlayPlugin\opcodes.jsonc" ? opcodes.OverlayDropped
+                : w == "lemegeton.xml" ? opcodes.LemegetonDropped : []) is { Count: > 0 } dropped
+                ? $" - 값을 구하지 못해 뺀 항목: {string.Join(", ", dropped)}" : "")));
             return (skipped.Count == 0 ? StepStatus.Ok : StepStatus.Warning,
                     string.Join(" ", written.Count > 0
                         ? skipped.Prepend($"{string.Join(", ", written.Select(w => $@"extras\{w}"))} 파일을 만들었습니다.")

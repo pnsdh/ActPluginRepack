@@ -40,6 +40,8 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     private Mono.Cecil.ModuleDefinition? _plugin;
     private bool _overlayTemplateTried;
     private string? _overlayTemplate; // OverlayPlugin 저장소의 opcodes.jsonc (틀, diff 로 채울 옛 목록)
+    private bool _lemegetonTemplateTried;
+    private string? _lemegetonTemplate; // Lemegeton 본가 blueprint.xml (틀, diff 로 채울 옛 목록)
 
     // 쓴 결과
     private readonly List<ResolvedOpcodes> _resolved = [];
@@ -54,8 +56,9 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     // 공개 자료 없이 직접 구한 값(로컬 opcodediff / IDA)으로만 정한 지역 — 큰 패치에서는 틀릴 수 있어 공개되면 다시 확인할 것
     public IReadOnlyCollection<Region> Unconfirmed => _unconfirmed;
 
-    // OverlayPlugin opcodes.jsonc 에서 값을 구하지 못해 뺀 항목 ("지역 이름", Finish 뒤에)
+    // OverlayPlugin opcodes.jsonc / lemegeton.xml 에서 값을 구하지 못해 뺀 항목 ("지역 이름", Finish 뒤에)
     public List<string> OverlayDropped { get; private set; } = [];
+    public List<string> LemegetonDropped { get; private set; } = [];
 
     // 베이스 플러그인을 읽은 Cecil 모듈은 파일을 연 채로 둔다 — 취소·실패해도 닫히게 (Prepare 가 using)
     public void Dispose() => _plugin?.Dispose();
@@ -253,7 +256,11 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
             return (written, skipped);
         }
         Log.Info();
-        if (LemegetonOutput.Write(ws.LemegetonPath, _resolved)) written.Add("lemegeton.xml");
+        if (LemegetonOutput.Write(ws.LemegetonPath, _resolved, LemegetonTemplate()) is { } lemegetonDropped)
+        {
+            written.Add("lemegeton.xml");
+            LemegetonDropped = lemegetonDropped;
+        }
         // Machina 형식: 이번에 구한 지역의 input\opcodes 파일 그대로 (플러그인에 들어가는 값 — 공개된 opcode 와 견줘 보기용)
         var machina = new List<string>();
         foreach (var region in _resolved.Select(r => r.Region).Distinct())
@@ -516,15 +523,21 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
     }
 
     // 대응표(옛 값 -> 새 값)로 바꾼 결과에 없는 이름(부가 출력용 — 베이스 플러그인에 없는 MapEffect 등)을, 맞댄 옛 출시(prev)의 다른
-    // 목록을 같은 대응표로 바꿔 채운다: 그 출시의 Yarukon 목록, OverlayPlugin 원본 파일의 그 게임 버전 항목(패치 당일에는 보통 직전
-    // 출시 값 — 통합 지역은 같은 버전이면 opcode 가 같아 어느 지역 항목이든). 그 목록이 대응표의 옛 값과 거의 다(90%) 맞을 때만.
+    // 목록을 같은 대응표로 바꿔 채운다: 그 출시의 Yarukon 목록, OverlayPlugin 원본 파일·Lemegeton 본가 blueprint 의 그 게임 버전
+    // 항목(패치 당일에는 보통 직전 출시 값 — 통합 지역은 같은 버전이면 opcode 가 같아 어느 지역 항목이든). 그 목록이 대응표의
+    // 옛 값과 거의 다(90%) 맞을 때만. 채우는 이름은 출력들이 쓰는 이름 (본가 틀에 새로 생긴 이름 포함).
     private void FillFromPrevious(Dictionary<string, int> server, Dictionary<int, int> map, string prev, string source)
     {
         var lists = new List<(string What, Dictionary<string, int> Old)>();
         if (Use("yarukon") && Try($"Yarukon {prev}", () => Yarukon(prev)) is { } prevList) lists.Add(($"Yarukon {prev}", prevList.Server));
-        if (OverlayTemplate() is { } template)
-            foreach (var e in OverlayPluginOutput.Entries(template).Where(e => e.Version == prev))
-                if (Region.All.Any(r => r.CnOpcodes && r.Opcodes == e.Region)) lists.Add(($"OverlayPlugin {e.Region} {prev}", e.Server));
+        var overlay = OverlayPluginOutput.Entries(OverlayTemplate() ?? "");
+        foreach (var e in overlay.Where(e => e.Version == prev))
+            if (Region.All.Any(r => r.CnOpcodes && r.Opcodes == e.Region)) lists.Add(($"OverlayPlugin {e.Region} {prev}", e.Server));
+        var lemegeton = LemegetonOutput.Entries(LemegetonTemplate());
+        foreach (var e in lemegeton.Where(e => e.Version == prev))
+            if (Region.All.Any(r => r.CnOpcodes && r.Lemegeton == e.Region)) lists.Add(($"Lemegeton {e.Region} {prev}", e.Server));
+        var wanted = OpcodeNames.Used.Concat(overlay.SelectMany(e => e.Server.Keys)).Concat(lemegeton.SelectMany(e => e.Server.Keys))
+            .ToHashSet(StringComparer.Ordinal);
         var filled = new List<string>();
         foreach (var (what, old) in lists)
         {
@@ -534,7 +547,7 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
                 Log.Note($"[opcode] {source}: {what} 가 맞댄 옛 출시 값이 아닌 듯 - 채우는 데 쓰지 않음");
                 continue;
             }
-            foreach (var (name, old2) in used)
+            foreach (var (name, old2) in old.Where(kv => wanted.Contains(kv.Key)))
                 if (!server.ContainsKey(name) && map.TryGetValue(old2, out int now))
                 {
                     server[name] = now;
@@ -542,6 +555,16 @@ internal sealed class OpcodeCollector(Workspace ws, string pluginPath, AppConfig
                 }
         }
         if (filled.Count > 0) Log.Note($"[opcode] {source}: 대응표로 바꿔 채움 - {string.Join(", ", filled)}");
+    }
+
+    // Lemegeton 본가 blueprint.xml (한 번만 받는다). 받지 못하면 null — 이 도구의 항목 목록으로 쓴다
+    private string? LemegetonTemplate()
+    {
+        if (_lemegetonTemplateTried) return _lemegetonTemplate;
+        _lemegetonTemplateTried = true;
+        try { _lemegetonTemplate = Http.GetStringOrNull(LemegetonOutput.UpstreamUrl); }
+        catch (Exception ex) when (Errors.Recoverable(ex)) { Log.Warn($"[lemegeton] Lemegeton 본가 blueprint 를 받지 못함 - {ex.Message}"); }
+        return _lemegetonTemplate;
     }
 
     // OverlayPlugin 저장소의 opcodes.jsonc (한 번만 받는다). 받지 못하면 null — 출처 실패로 세지 않는다 (opcode 는 그대로 고친다)
